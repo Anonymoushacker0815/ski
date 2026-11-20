@@ -19,6 +19,47 @@
     "at/mayrhofen",
   ];
   const LIST_KEY = "ski.list";
+  const VIEW_KEY = "ski.view";
+
+  // Skipässe, die LiftRadar nicht als Gruppe führt (weitere kommen aus liftradar.eu/json/groups.json)
+  const CUSTOM_PASSES = [
+    {
+      id: "kaerntner-skipass",
+      name: "Kärntner Skipass",
+      kind: "region",
+      website: "https://www.kaerntner-skipass.com/skigebiete/",
+      // Mitgliedsgebiete laut kaerntner-skipass.com (Stand Nov. 2026), zugeordnet zu LiftRadar
+      members: [
+        "at/ankogel-mallnitz",
+        "at/bad-kleinkirchheim",
+        "at/dreilaendereck",
+        "at/gerlitzen",
+        "at/goldeck",
+        "at/heiligenblut",
+        "at/dorfberg-kartitsch",
+        "at/katschberg-aineck",
+        "at/klippitztoerl",
+        "at/koralpe",
+        "at/lienz-zettersfeld-hochstein",
+        "at/grossglockner-resort-kals-matrei",
+        "at/moelltaler-gletscher",
+        "at/nassfeld",
+        "at/obertilliacher-bergbahnen",
+        "at/petzen",
+        "at/bichllifte-praegraten",
+        "at/skizentrum-sillian-hochpustertal",
+        "at/simonhoehe",
+        "at/skizentrum-st-jakob",
+        "at/turracher-hoehe",
+        "at/weissensee",
+      ],
+      // im Pass enthalten, aber ohne Daten bei LiftRadar
+      missing: [
+        "Bodental", "Emberger Alm", "Flattnitz", "Heidi-Alm Falkert", "Hochrindl",
+        "Skieldorado Hrast", "Kötschach-Mauthen", "Weinebene", "Weißbriach/Gitschtal",
+      ],
+    },
+  ];
 
   const STATUS = {
     open: { label: "Geöffnet", rank: 0 },
@@ -68,12 +109,16 @@
     histChips: document.getElementById("hist-chips"),
     histInfo: document.getElementById("hist-info"),
     lastColHead: document.getElementById("last-col-head"),
+    view: document.getElementById("view"),
+    passInfo: document.getElementById("pass-info"),
   };
 
   const state = {
     all: [], // alle Skigebiete von LiftRadar (Europa)
-    resorts: [], // angezeigte Skigebiete (Reihenfolge wie in list)
+    resorts: [], // angezeigte Skigebiete (eigene Liste oder Skipass)
     list: new Set(loadList() || DEFAULT_LIST), // Schlüssel "land/id" der eigenen Liste
+    passes: [], // { id, name, kind, website, members: [...], missing: [...] }
+    view: "list", // "list" = eigene Liste, sonst Skipass-id
     details: {}, // Schlüssel -> volle Einzelmeldung (LiftRadar)
     weather: {}, // Schlüssel -> { snowCm, elevation, tempNow, days: [...] }
     expanded: new Set(), // Schlüssel mit aufgeklappter Prognose
@@ -108,6 +153,97 @@
   }
   const isDefaultList = () =>
     state.list.size === DEFAULT_LIST.length && DEFAULT_LIST.every((k) => state.list.has(k));
+
+  // ---------- Ansicht: eigene Liste oder Skipass ----------
+
+  const currentPass = () => state.passes.find((p) => p.id === state.view) || null;
+
+  // Skigebiete der aktuellen Ansicht neu bestimmen
+  function refreshResorts() {
+    const pass = currentPass();
+    const keys = pass ? new Set(pass.members) : state.list;
+    state.resorts = state.all.filter((r) => keys.has(key(r)));
+    if (els.showWeather.checked) state.resorts.forEach((r) => state.expanded.add(key(r)));
+  }
+
+  // Details, Wetter und ggf. Verlauf für Gebiete nachladen, die noch fehlen
+  async function ensureData(list) {
+    const need = list.filter((r) => !state.details[key(r)] || !state.weather[key(r)]);
+    await Promise.all([
+      need.length ? loadDetails(need) : null,
+      need.length ? loadWeather(need) : null,
+      loadHistory(list),
+    ]);
+  }
+
+  async function loadPasses() {
+    let groups = {};
+    try {
+      groups = (await getJSON(`${LIFTRADAR}/json/groups.json`)).groups || {};
+    } catch (err) {
+      console.warn("Skipass-Gruppen nicht ladbar:", err);
+    }
+    const fromLR = Object.entries(groups).map(([id, g]) => ({
+      id, name: g.name, kind: g.kind, website: g.website, members: g.members || [], missing: [],
+    }));
+    state.passes = [...CUSTOM_PASSES, ...fromLR.filter((p) => !CUSTOM_PASSES.some((c) => c.id === p.id))];
+    buildViewSelect();
+  }
+
+  function passCountries(p) {
+    return [...new Set(p.members.map((m) => m.split("/")[0]))].map(countryName).join(", ");
+  }
+
+  function buildViewSelect() {
+    // Österreich zuerst, dann alphabetisch; eigene Pässe ganz oben
+    const rank = (p) => (CUSTOM_PASSES.some((c) => c.id === p.id) ? 0
+      : p.members.some((m) => m.startsWith("at/")) ? 1 : 2);
+    const sortP = (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, "de");
+    const opt = (p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(passCountries(p))}</option>`;
+    const passes = state.passes.filter((p) => p.kind !== "linked").sort(sortP);
+    const linked = state.passes.filter((p) => p.kind === "linked").sort(sortP);
+    els.view.innerHTML =
+      '<option value="list">Meine Liste</option>' +
+      (passes.length ? `<optgroup label="Skipässe">${passes.map(opt).join("")}</optgroup>` : "") +
+      (linked.length ? `<optgroup label="Verbundene Skigebiete">${linked.map(opt).join("")}</optgroup>` : "");
+    els.view.value = state.view;
+  }
+
+  // Ansicht wechseln; merkt sich die Wahl und schreibt sie in die Adresse (#pass-id) zum Teilen
+  async function setView(view, { remember = true } = {}) {
+    if (view !== "list" && !state.passes.some((p) => p.id === view)) view = "list";
+    state.view = view;
+    els.view.value = view;
+    if (remember) storageSet(VIEW_KEY, view);
+    const hash = view === "list" ? "" : `#${view}`;
+    if (location.hash !== hash) {
+      history.replaceState(null, "", location.pathname + location.search + hash);
+    }
+    refreshResorts();
+    render();
+    searchHint();
+    await ensureData(state.resorts);
+    if (state.view === view) render();
+  }
+
+  function renderPassInfo() {
+    const pass = currentPass();
+    if (!pass) { els.passInfo.hidden = true; els.passInfo.innerHTML = ""; return; }
+    const shown = state.resorts.length;
+    const unknownKeys = pass.members.filter((k) => !state.all.some((r) => key(r) === k));
+    const missing = [...pass.missing, ...unknownKeys];
+    const notInList = state.resorts.filter((r) => !inList(r)).length;
+    els.passInfo.hidden = false;
+    els.passInfo.innerHTML =
+      `<strong>${esc(pass.name)}</strong>: ${shown} ${shown === 1 ? "Skigebiet" : "Skigebiete"} mit Live-Daten` +
+      (pass.website ? ` · <a href="${esc(pass.website)}" target="_blank" rel="noopener">Website</a>` : "") +
+      (notInList
+        ? ` · <button type="button" class="link-btn" data-action="add-all">Alle ${notInList} zu meiner Liste hinzufügen</button>`
+        : ` · <span class="muted">Alle sind in deiner Liste.</span>`) +
+      (missing.length
+        ? `<br><span class="muted">Ebenfalls im Pass, aber ohne Daten: ${esc(missing.join(", "))}.</span>`
+        : "");
+  }
 
   let regionNames = null;
   try { regionNames = new Intl.DisplayNames(["de"], { type: "region" }); } catch (_) { /* alter Browser */ }
@@ -400,11 +536,18 @@
     els.dataTime.textContent = "Lade Daten …";
 
     try {
-      const index = await getJSON(`${LIFTRADAR}/json/index.json`);
+      const [index] = await Promise.all([
+        getJSON(`${LIFTRADAR}/json/index.json`),
+        state.passes.length ? null : loadPasses(),
+      ]);
       state.generatedAt = index.generated_at;
       state.all = index.resorts;
-      state.resorts = state.all.filter(inList);
-      if (els.showWeather.checked) state.resorts.forEach((r) => state.expanded.add(key(r)));
+
+      // Ansicht: Adresse (#pass-id, z. B. geteilter Link) vor gespeicherter Wahl
+      const wanted = decodeURIComponent(location.hash.slice(1)) || storageGet(VIEW_KEY) || "list";
+      state.view = state.passes.some((p) => p.id === wanted) ? wanted : "list";
+      els.view.value = state.view;
+      refreshResorts();
       els.search.disabled = false;
       searchIndex = null; // neu aufbauen mit frischen Daten
       searchHint();
@@ -531,6 +674,7 @@
     const hist = !!state.histDate;
     const view = hist ? state.resorts.map(histView) : state.resorts;
     renderHeader();
+    renderPassInfo();
     renderHistory(view);
     renderSummary(view);
     els.lastColHead.textContent = hist ? "Neuschnee am Tag" : "Letzter Schneefall";
@@ -540,7 +684,7 @@
         `<tr class="placeholder"><td colspan="6">Lade Schneestand vom ${esc(fmtDay(state.histDate))} …</td></tr>`;
       return;
     }
-    if (!state.resorts.length && state.all.length) {
+    if (!state.resorts.length && state.all.length && state.view === "list") {
       els.rows.innerHTML = `<tr class="placeholder"><td colspan="6">
           Deine Liste ist leer. Oben ein Skigebiet suchen und hinzufügen –
           oder <button type="button" class="link-btn" data-action="reset-list">die 10 größten Gebiete Österreichs laden</button>.
@@ -791,7 +935,11 @@
       <td>
         <div class="name-line">
           <div class="name">${name}</div>
-          <button type="button" class="remove-btn" data-key="${esc(key(r))}" title="Aus der Liste entfernen" aria-label="${esc(r.name)} aus der Liste entfernen">✕</button>
+          ${state.view === "list"
+            ? `<button type="button" class="remove-btn" data-key="${esc(key(r))}" title="Aus der Liste entfernen" aria-label="${esc(r.name)} aus der Liste entfernen">✕</button>`
+            : inList(r)
+              ? '<span class="in-list" title="In deiner Liste">✓</span>'
+              : `<button type="button" class="add-btn" data-key="${esc(key(r))}" title="Zu meiner Liste hinzufügen" aria-label="${esc(r.name)} zu meiner Liste hinzufügen">＋</button>`}
         </div>
         <div class="place">${esc(placeLabel(r))}</div>
         <div class="meta">
@@ -898,33 +1046,44 @@
   async function resetList() {
     try { localStorage.removeItem(LIST_KEY); } catch (_) { /* egal */ }
     state.list = new Set(DEFAULT_LIST);
-    state.resorts = state.all.filter(inList);
-    if (els.showWeather.checked) state.resorts.forEach((r) => state.expanded.add(key(r)));
-    render();
+    await setView("list");
     searchHint("Liste auf die 10 größten Skigebiete Österreichs zurückgesetzt.");
-    const missing = state.resorts.filter((r) => !state.details[key(r)]);
-    if (missing.length) {
-      await Promise.all([loadDetails(missing), loadWeather(missing), loadHistory(missing)]);
-      render();
-    }
   }
 
+  // Aus der Skipass-Ansicht in die eigene Liste übernehmen (Ansicht bleibt)
+  function addToList(keys) {
+    const added = keys.filter((k) => !state.list.has(k));
+    if (!added.length) return;
+    added.forEach((k) => state.list.add(k));
+    saveList();
+    render();
+    const one = added.length === 1 && state.all.find((r) => key(r) === added[0]);
+    searchHint(one ? `${one.name} zu deiner Liste hinzugefügt.`
+      : `${added.length} Skigebiete zu deiner Liste hinzugefügt.`);
+  }
+
+  // Über die Suche hinzufügen: landet in der eigenen Liste, die dann angezeigt wird
   async function addResort(k) {
     const r = state.all.find((x) => key(x) === k);
     if (!r || inList(r)) return;
     state.list.add(k);
     saveList();
-    state.resorts.push(r);
     if (els.showWeather.checked) state.expanded.add(k);
     els.search.value = "";
     closeSearch();
-    render();
     const hidden = els.onlyOpen.checked && r.status !== "open";
-    searchHint(`${r.name} hinzugefügt.` +
-      (hidden ? " Es ist gerade geschlossen und wird durch „Nur offene Gebiete“ ausgeblendet." : ""));
+    const hint = `${r.name} hinzugefügt.` +
+      (hidden ? " Es ist gerade geschlossen und wird durch „Nur offene Gebiete“ ausgeblendet." : "");
 
-    await Promise.all([loadDetails([r]), loadWeather([r]), loadHistory([r])]);
-    render();
+    if (state.view !== "list") {
+      await setView("list");
+    } else {
+      refreshResorts();
+      render();
+      await ensureData([r]);
+      render();
+    }
+    searchHint(hint);
     const row = els.rows.querySelector(`tr[data-key="${CSS.escape(k)}"]`);
     if (row) {
       row.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -934,10 +1093,10 @@
 
   function removeResort(k) {
     const r = state.resorts.find((x) => key(x) === k);
-    if (!r) return;
+    if (!r || state.view !== "list") return;
     state.list.delete(k);
     saveList();
-    state.resorts = state.resorts.filter((x) => key(x) !== k);
+    refreshResorts();
     state.expanded.delete(k);
     render();
     searchHint(`${r.name} entfernt.`);
@@ -967,10 +1126,19 @@
   // "Zurücksetzen"-Knöpfe (im Suchhinweis und bei leerer Liste)
   document.addEventListener("click", (e) => {
     if (e.target.closest('[data-action="reset-list"]')) resetList();
+    if (e.target.closest('[data-action="add-all"]')) addToList(state.resorts.map(key));
+  });
+  els.view.addEventListener("change", () => setView(els.view.value));
+  // Zurück/Vor oder geänderte Adresse (#pass-id)
+  window.addEventListener("hashchange", () => {
+    const wanted = decodeURIComponent(location.hash.slice(1)) || "list";
+    if (wanted !== state.view) setView(wanted);
   });
   els.rows.addEventListener("click", (e) => {
     const remove = e.target.closest(".remove-btn");
     if (remove) { removeResort(remove.dataset.key); return; }
+    const add = e.target.closest(".add-btn");
+    if (add) { addToList([add.dataset.key]); return; }
 
     const btn = e.target.closest(".wx-toggle");
     if (!btn) return;

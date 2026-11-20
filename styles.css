@@ -93,6 +93,45 @@ a { color: var(--accent); }
 .stat .value { font-size: 1.5rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 .stat .label { color: var(--muted); font-size: 0.85rem; }
 
+/* Ansicht: eigene Liste oder Skipass */
+.view-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 20px 0 0;
+}
+.view-picker .search-label { margin: 0; }
+.view-select {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: 10px;
+  max-width: 100%;
+}
+.pass-info { flex-basis: 100%; margin: 0; font-size: 0.85rem; }
+.muted { color: var(--muted); }
+.add-btn, .in-list {
+  flex: none;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  border-radius: 999px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.add-btn {
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--accent);
+  cursor: pointer;
+}
+.add-btn:hover { background: var(--accent); color: var(--surface); }
+.in-list { color: var(--open); border: 1px solid var(--open-bg); background: var(--open-bg); }
+
 /* Suche + Datum */
 .tools {
   display: grid;

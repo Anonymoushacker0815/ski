@@ -4,6 +4,8 @@ Statische Webapp (HTML/CSS/JS, kein Build): deine Skigebiete auf einen Blick –
 
 Beim ersten Besuch zeigt die Seite die 10 größten Skigebiete Österreichs (nach Pisten-km). Über das Suchfeld lassen sich beliebige Skigebiete aus dem LiftRadar-Bestand (ganz Europa) hinzufügen, mit ✕ entfernen und die Liste wieder auf die Top 10 zurücksetzen. Die Liste wird im `localStorage` des Browsers gespeichert.
 
+Über „Anzeigen“ lässt sich statt der eigenen Liste ein Skipass wählen, z. B. der Kärntner Skipass, Dolomiti Superski, Ski amadé oder der Zillertaler Superskipass. Die Pässe kommen aus [LiftRadar](https://liftradar.eu/json/groups.json); der Kärntner Skipass ist in `app.js` (`CUSTOM_PASSES`) nach [kaerntner-skipass.com](https://www.kaerntner-skipass.com/skigebiete/) gepflegt. Einzelne Gebiete eines Passes lassen sich mit ＋ in die eigene Liste übernehmen. Jede Pass-Ansicht hat einen eigenen Link zum Teilen, z. B. `…/ski/#kaerntner-skipass`.
+
 ## Starten
 
 ```bash
