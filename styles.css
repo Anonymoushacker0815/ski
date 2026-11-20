@@ -193,6 +193,15 @@ a { color: var(--accent); }
   cursor: pointer;
 }
 .remove-btn:hover { color: var(--closed); border-color: var(--closed); }
+.link-btn {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
 @keyframes flash { from { background: var(--open-bg); } to { background: transparent; } }
 .resorts tr.flash > td { animation: flash 1.8s ease-out; }
 

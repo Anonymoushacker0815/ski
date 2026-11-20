@@ -1,8 +1,8 @@
-# Skigebiete Kärnten
+# Ski
 
-Statische Webapp (HTML/CSS/JS, kein Build), die alle von LiftRadar erfassten Kärntner Skigebiete mit Schneehöhe, offenen Liften und Pisten zeigt.
+Statische Webapp (HTML/CSS/JS, kein Build): deine Skigebiete auf einen Blick – Schneehöhe, offene Lifte und Pisten, 7-Tage-Wetter und historischer Schneestand.
 
-Über das Suchfeld lassen sich beliebige weitere Skigebiete aus dem LiftRadar-Bestand (ganz Europa) hinzufügen und wieder entfernen; die Auswahl wird im `localStorage` des Browsers gespeichert.
+Beim ersten Besuch zeigt die Seite die 10 größten Skigebiete Österreichs (nach Pisten-km). Über das Suchfeld lassen sich beliebige Skigebiete aus dem LiftRadar-Bestand (ganz Europa) hinzufügen, mit ✕ entfernen und die Liste wieder auf die Top 10 zurücksetzen. Die Liste wird im `localStorage` des Browsers gespeichert.
 
 ## Starten
 

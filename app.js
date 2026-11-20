@@ -3,8 +3,22 @@
 
   const LIFTRADAR = "https://liftradar.eu";
   const OPEN_METEO = "https://api.open-meteo.com/v1/forecast";
-  const REGION = "Kärnten";
   const FORECAST_DAYS = 7;
+
+  // Startliste beim ersten Besuch: die 10 größten Skigebiete Österreichs nach Pisten-km (LiftRadar, Nov. 2026)
+  const DEFAULT_LIST = [
+    "at/ski-arlberg",
+    "at/skiwelt",
+    "at/skicircus-saalbach",
+    "at/ischgl-silvretta-arena",
+    "at/kitzbuehel",
+    "at/serfaus-fiss-ladis",
+    "at/zillertal-arena",
+    "at/silvretta-montafon",
+    "at/soelden",
+    "at/mayrhofen",
+  ];
+  const LIST_KEY = "ski.list";
 
   const STATUS = {
     open: { label: "Geöffnet", rank: 0 },
@@ -58,8 +72,8 @@
 
   const state = {
     all: [], // alle Skigebiete von LiftRadar (Europa)
-    resorts: [], // angezeigte Liste: Kärnten + selbst hinzugefügte
-    extra: new Set(loadExtra()), // Schlüssel "land/id" der hinzugefügten Gebiete
+    resorts: [], // angezeigte Skigebiete (Reihenfolge wie in list)
+    list: new Set(loadList() || DEFAULT_LIST), // Schlüssel "land/id" der eigenen Liste
     details: {}, // Schlüssel -> volle Einzelmeldung (LiftRadar)
     weather: {}, // Schlüssel -> { snowCm, elevation, tempNow, days: [...] }
     expanded: new Set(), // Schlüssel mit aufgeklappter Prognose
@@ -68,7 +82,7 @@
     // Historischer Schneestand
     histDate: null, // "JJJJ-MM-TT" oder null = aktuell
     histLoading: false,
-    ownIndex: null, // { dates: [...] } aus data/history/index.json, null = keine Erfassung
+    ownIndex: undefined, // { dates: [...] } aus data/history/index.json, null = keine Erfassung
     ownDays: {}, // Datum -> eigener Snapshot (oder null)
     lrHistory: {}, // Schlüssel -> LiftRadar-Verlauf (Spalten) oder null
     archive: {}, // Datum -> { Schlüssel -> { snowCm, snowfallCm, elevation } }
@@ -76,20 +90,24 @@
 
   // Eindeutiger Schlüssel pro Skigebiet (auch Adresse der Einzelmeldung)
   const key = (r) => `${r.country}/${r.id}`;
-  const isHome = (r) => r.country === "at" && r.region === REGION;
-  const inList = (r) => isHome(r) || state.extra.has(key(r));
+  const inList = (r) => state.list.has(key(r));
 
-  function loadExtra() {
+  // Gespeicherte Liste; null = noch nie geändert (dann gilt die Startliste)
+  function loadList() {
     try {
-      const v = JSON.parse(localStorage.getItem("ski.extra") || "[]");
-      return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+      const raw = localStorage.getItem(LIST_KEY);
+      if (raw == null) return null;
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v.filter((x) => typeof x === "string") : null;
     } catch (_) {
-      return [];
+      return null;
     }
   }
-  function saveExtra() {
-    try { localStorage.setItem("ski.extra", JSON.stringify([...state.extra])); } catch (_) { /* egal */ }
+  function saveList() {
+    try { localStorage.setItem(LIST_KEY, JSON.stringify([...state.list])); } catch (_) { /* egal */ }
   }
+  const isDefaultList = () =>
+    state.list.size === DEFAULT_LIST.length && DEFAULT_LIST.every((k) => state.list.has(k));
 
   let regionNames = null;
   try { regionNames = new Intl.DisplayNames(["de"], { type: "region" }); } catch (_) { /* alter Browser */ }
@@ -522,6 +540,13 @@
         `<tr class="placeholder"><td colspan="6">Lade Schneestand vom ${esc(fmtDay(state.histDate))} …</td></tr>`;
       return;
     }
+    if (!state.resorts.length && state.all.length) {
+      els.rows.innerHTML = `<tr class="placeholder"><td colspan="6">
+          Deine Liste ist leer. Oben ein Skigebiet suchen und hinzufügen –
+          oder <button type="button" class="link-btn" data-action="reset-list">die 10 größten Gebiete Österreichs laden</button>.
+        </td></tr>`;
+      return;
+    }
     const list = sorted(view.filter((r) => !els.onlyOpen.checked || r.status === "open"));
     if (!list.length) {
       const msg = !els.onlyOpen.checked ? "Keine Skigebiete gefunden."
@@ -726,7 +751,6 @@
     const hist = r.hist;
     const updated = hist ? null : fmtDateTime(d.lifts_updated_at || d.fetched_at || r.checked_at);
     const isOpen = !hist && state.expanded.has(key(r)) && !!state.weather[key(r)];
-    const added = !isHome(r);
 
     // Herkunft der Werte im historischen Modus
     let sourceText = "";
@@ -763,15 +787,13 @@
         (condition ? `<div class="updated">Piste: ${esc(condition)}</div>` : "");
     }
 
-    return `<tr data-key="${esc(key(r))}" class="${r.status === "open" ? "is-open" : "is-closed"}${isOpen ? " is-expanded" : ""}${added ? " is-added" : ""}">
+    return `<tr data-key="${esc(key(r))}" class="${r.status === "open" ? "is-open" : "is-closed"}${isOpen ? " is-expanded" : ""}">
       <td>
         <div class="name-line">
           <div class="name">${name}</div>
-          ${added
-            ? `<button type="button" class="remove-btn" data-key="${esc(key(r))}" title="Aus der Liste entfernen" aria-label="${esc(r.name)} aus der Liste entfernen">✕</button>`
-            : ""}
+          <button type="button" class="remove-btn" data-key="${esc(key(r))}" title="Aus der Liste entfernen" aria-label="${esc(r.name)} aus der Liste entfernen">✕</button>
         </div>
-        ${added ? `<div class="place">${esc(placeLabel(r))}</div>` : ""}
+        <div class="place">${esc(placeLabel(r))}</div>
         <div class="meta">
           <span class="badge ${esc(r.status)}">${esc(status.label)}</span>
           ${updated ? `<span class="updated">Stand ${esc(updated)}</span>` : ""}
@@ -866,15 +888,32 @@
   }
 
   function searchHint(text) {
-    els.searchHint.textContent = text ||
-      `Durchsucht ${fmt(state.all.length)} Skigebiete in ganz Europa. Hinzugefügte Gebiete bleiben in diesem Browser gespeichert.`;
+    const msg = text ||
+      `Durchsucht ${fmt(state.all.length)} Skigebiete in ganz Europa. Deine Liste bleibt in diesem Browser gespeichert.`;
+    els.searchHint.innerHTML = esc(msg) + (isDefaultList() ? ""
+      : ' <button type="button" class="link-btn" data-action="reset-list">Auf Top 10 Österreich zurücksetzen</button>');
+  }
+
+  // Zurück zur Startliste (gespeicherte Liste löschen)
+  async function resetList() {
+    try { localStorage.removeItem(LIST_KEY); } catch (_) { /* egal */ }
+    state.list = new Set(DEFAULT_LIST);
+    state.resorts = state.all.filter(inList);
+    if (els.showWeather.checked) state.resorts.forEach((r) => state.expanded.add(key(r)));
+    render();
+    searchHint("Liste auf die 10 größten Skigebiete Österreichs zurückgesetzt.");
+    const missing = state.resorts.filter((r) => !state.details[key(r)]);
+    if (missing.length) {
+      await Promise.all([loadDetails(missing), loadWeather(missing), loadHistory(missing)]);
+      render();
+    }
   }
 
   async function addResort(k) {
     const r = state.all.find((x) => key(x) === k);
     if (!r || inList(r)) return;
-    state.extra.add(k);
-    saveExtra();
+    state.list.add(k);
+    saveList();
     state.resorts.push(r);
     if (els.showWeather.checked) state.expanded.add(k);
     els.search.value = "";
@@ -895,9 +934,9 @@
 
   function removeResort(k) {
     const r = state.resorts.find((x) => key(x) === k);
-    if (!r || isHome(r)) return;
-    state.extra.delete(k);
-    saveExtra();
+    if (!r) return;
+    state.list.delete(k);
+    saveList();
     state.resorts = state.resorts.filter((x) => key(x) !== k);
     state.expanded.delete(k);
     render();
@@ -924,6 +963,10 @@
   els.sort.addEventListener("change", () => {
     storageSet("ski.sort", els.sort.value);
     render();
+  });
+  // "Zurücksetzen"-Knöpfe (im Suchhinweis und bei leerer Liste)
+  document.addEventListener("click", (e) => {
+    if (e.target.closest('[data-action="reset-list"]')) resetList();
   });
   els.rows.addEventListener("click", (e) => {
     const remove = e.target.closest(".remove-btn");
