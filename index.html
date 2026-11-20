@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skigebiete Kärnten</title>
+  <meta name="description" content="Alle Kärntner Skigebiete mit aktuellen Schneehöhen, offenen Liften und Pisten.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄️</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="page-header">
+    <div class="wrap">
+      <h1>Skigebiete Kärnten</h1>
+      <p class="subtitle">Schneehöhen, offene Lifte und Pisten</p>
+      <p class="data-time" id="data-time" aria-live="polite">Lade Daten …</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="summary" id="summary" aria-label="Überblick"></section>
+
+    <div class="tools">
+    <section class="search" aria-label="Weitere Skigebiete hinzufügen">
+      <label for="search" class="search-label">Weitere Skigebiete hinzufügen</label>
+      <div class="search-box">
+        <input type="search" id="search" class="search-input"
+          placeholder="Suchen, z. B. Schladming, Kronplatz, Kranjska Gora …"
+          autocomplete="off" spellcheck="false" disabled
+          role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="search-results">
+        <ul id="search-results" class="search-results" role="listbox" aria-label="Suchergebnisse" hidden></ul>
+      </div>
+      <p id="search-hint" class="search-hint" aria-live="polite"></p>
+    </section>
+
+    <section class="history" aria-label="Historischer Schneestand">
+      <label for="hist-date" class="search-label">Schneestand am</label>
+      <div class="hist-controls">
+        <input type="date" id="hist-date" class="date-input">
+        <div class="chips" id="hist-chips">
+          <button type="button" class="chip" data-days="0">Heute</button>
+          <button type="button" class="chip" data-days="-1">Gestern</button>
+          <button type="button" class="chip" data-days="-7">Vor 1 Woche</button>
+          <button type="button" class="chip" data-years="-1">Vor 1 Jahr</button>
+        </div>
+      </div>
+      <p id="hist-info" class="search-hint" aria-live="polite"></p>
+    </section>
+    </div>
+
+    <section class="controls" aria-label="Filter und Sortierung">
+      <label class="toggle">
+        <input type="checkbox" id="only-open">
+        <span>Nur offene Gebiete</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="show-weather">
+        <span>Wetter für alle aufklappen</span>
+      </label>
+      <label class="sort">
+        <span>Sortieren</span>
+        <select id="sort">
+          <option value="status">Status</option>
+          <option value="name">Name</option>
+          <option value="snow">Schneehöhe Berg</option>
+          <option value="newsnow">Neuschnee-Prognose</option>
+          <option value="lifts">Offene Lifte</option>
+          <option value="slopes">Offene Pisten-km</option>
+        </select>
+      </label>
+      <button type="button" id="reload" class="btn">Aktualisieren</button>
+    </section>
+
+    <div id="error" class="error" role="alert" hidden></div>
+
+    <section aria-label="Skigebiete">
+      <table class="resorts" id="resorts">
+        <thead>
+          <tr>
+            <th scope="col">Skigebiet</th>
+            <th scope="col" class="num">Schnee Berg</th>
+            <th scope="col" class="num">Schnee Tal</th>
+            <th scope="col">Lifte offen</th>
+            <th scope="col">Pisten offen</th>
+            <th scope="col" id="last-col-head">Letzter Schneefall</th>
+          </tr>
+        </thead>
+        <tbody id="resort-rows">
+          <tr class="placeholder"><td colspan="6">Lade Skigebiete …</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <p class="legend">
+      <span class="model">≈ 12 cm</span> = Modellwert von Open-Meteo, wenn das Skigebiet selbst keine Schneehöhe meldet
+      (berechnet für die Höhe des Gebietspunkts, ohne Kunstschnee).
+      Die 7-Tage-Prognose (Temperatur max/min, Sonnenstunden, Niederschlag mit Wahrscheinlichkeit, Neuschnee, Wind) gilt ebenfalls für diese Höhe –
+      auf das Wetter-Feld beim Skigebiet klicken. Der Pfeil zeigt, wohin der Wind weht; Böen ab 60 km/h sind
+      <span class="warn-text">hervorgehoben</span>, weil Lifte dann oft eingeschränkt fahren.
+    </p>
+    <p class="legend">
+      <strong>Historischer Schneestand:</strong> Für ein vergangenes Datum zeigt die Tabelle zuerst die selbst erfassten Werte
+      (täglicher Snapshot über <code>scripts/record_snow.py</code>), sonst den gemeldeten Verlauf von LiftRadar (letzte 365 Tage,
+      seit 24.10.2026). Fehlt beides, gibt es nur Modellwerte aus dem Open-Meteo-Archiv (ab 1940, ohne Kunstschnee).
+    </p>
+  </main>
+
+  <footer class="page-footer">
+    <div class="wrap">
+      Daten: <a href="https://liftradar.eu" target="_blank" rel="noopener">LiftRadar</a>
+      (aus Berichten von <a href="https://www.kaernten.at/service/wetter/schneeberichte/" target="_blank" rel="noopener">kaernten.at</a>
+      und den Skigebieten) · Modell-Schneehöhen:
+      <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0).
+      Angaben ohne Gewähr – vor der Anreise beim Skigebiet prüfen.
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

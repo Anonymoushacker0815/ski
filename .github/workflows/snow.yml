@@ -1,0 +1,70 @@
+name: Schnee erfassen & Seite veröffentlichen
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # UTC: 08:30 / 13:30 = 09:30 / 14:30 Wiener Winterzeit,
+    # kurz nach den LiftRadar-Updates (ca. 08:40 und 13:40)
+    - cron: "30 8 * * *"
+    - cron: "30 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write # Snapshot committen
+  pages: write # Seite veröffentlichen
+  id-token: write
+
+concurrency:
+  group: snow-pages
+  cancel-in-progress: false
+
+jobs:
+  record:
+    # Bei normalen Code-Pushes nichts erfassen, nur veröffentlichen
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Snapshot speichern
+        run: python scripts/record_snow.py
+
+      - name: Snapshot committen
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history
+          if git diff --cached --quiet; then
+            echo "Keine Änderungen"
+            exit 0
+          fi
+          git commit -m "Schnee-Snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase
+          git push
+
+  deploy:
+    needs: record
+    # Läuft nach der Erfassung und bei jedem Push (dann ist "record" übersprungen)
+    if: ${{ !cancelled() && needs.record.result != 'failure' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main # inklusive des gerade committeten Snapshots
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
