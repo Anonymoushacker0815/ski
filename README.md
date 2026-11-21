@@ -6,6 +6,14 @@ Beim ersten Besuch zeigt die Seite die 10 größten Skigebiete Österreichs (nac
 
 Über „Anzeigen“ lässt sich statt der eigenen Liste ein Skipass wählen, z. B. der Kärntner Skipass, Dolomiti Superski, Ski amadé oder der Zillertaler Superskipass. Die Pässe kommen aus [LiftRadar](https://liftradar.eu/json/groups.json); der Kärntner Skipass ist in `app.js` (`CUSTOM_PASSES`) nach [kaerntner-skipass.com](https://www.kaerntner-skipass.com/skigebiete/) gepflegt. Einzelne Gebiete eines Passes lassen sich mit ＋ in die eigene Liste übernehmen. Jede Pass-Ansicht hat einen eigenen Link zum Teilen, z. B. `…/ski/#kaerntner-skipass`.
 
+## Karte mit Liften und Pisten
+
+Ein Klick auf „Lifte offen“ öffnet die Detailansicht: Karte (OpenTopoMap, wahlweise OpenStreetMap) mit dem Gebietsumriss, allen Pisten nach Schwierigkeit eingefärbt und allen Liften, dazu eine Liftliste mit Typ, Länge, Tal-/Bergstation, Förderleistung und Ausstattung. Ein Klick auf einen Lift zeigt ihn auf der Karte.
+
+- Geometrie: [OpenSkiData](https://openskimap.org) (© OpenStreetMap-Mitwirkende, ODbL), von LiftRadar als Kacheln (`/ski/v1/10/x/y.json`) aufbereitet und jedem Gebiet zugeordnet; geladen werden die Kachel des Gebietspunkts und ihre 8 Nachbarn.
+- Betrieb: Wie viele Lifte je Typ offen sind, kommt aus der LiftRadar-Meldung. Welcher Lift genau läuft, meldet die Quelle nicht – die Karte färbt Lifte deshalb nicht nach offen/zu.
+- [Leaflet](https://leafletjs.com) 1.9.4 wird erst beim ersten Öffnen von cdnjs geladen (mit SRI-Prüfsumme).
+
 ## Webcams
 
 Mit 📷 klappen Webcams in der Nähe eines Skigebiets auf. Die Zuordnung erzeugt `scripts/build_webcams.py` (Kameras bis 5 km um den Gebietspunkt, bis 12 km, wenn der Gebietsname im Kameranamen vorkommt) und schreibt sie nach `data/webcams.json`:

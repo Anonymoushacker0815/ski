@@ -131,6 +131,7 @@
     lastColHead: document.getElementById("last-col-head"),
     view: document.getElementById("view"),
     passInfo: document.getElementById("pass-info"),
+    detail: document.getElementById("detail"),
   };
 
   const state = {
@@ -918,11 +919,18 @@
     return '<span class="na">–</span>';
   }
 
+  // Klickbar: öffnet die Karte mit Liften und Pisten
   function liftsCell(r) {
     const l = r.lifts;
-    if (!l || l.total == null) return '<span class="na">–</span>';
-    return `<div class="count">${fmt(l.open)} <small>/ ${fmt(l.total)}</small></div>
-      <div class="bar" aria-hidden="true"><span style="width:${pct(l.open, l.total)}%"></span></div>`;
+    const inner = !l || l.total == null
+      ? '<span class="na">–</span>'
+      : `<span class="count">${fmt(l.open)} <small>/ ${fmt(l.total)}</small></span>
+        <span class="bar" aria-hidden="true"><span style="width:${pct(l.open, l.total)}%"></span></span>`;
+    if (!r.location) return inner;
+    return `<button type="button" class="lift-btn" data-key="${esc(key(r))}"
+        title="Karte mit Liften und Pisten" aria-label="${esc(r.name)}: Lifte und Pisten auf der Karte">
+        ${inner}<span class="lift-map">Karte ›</span>
+      </button>`;
   }
 
   function slopesCell(r) {
@@ -1355,6 +1363,319 @@
     </tr>${isOpen ? weatherRowHTML(r, camOpen) : ""}${camOpen ? camRowHTML(r) : ""}`;
   }
 
+  // ---------- Detailansicht: Karte mit Liften und Pisten ----------
+  // Geometrie aus OpenSkiData (OpenStreetMap), aufbereitet von LiftRadar als Kacheln (Zoom 10),
+  // jedes Element mit seinem LiftRadar-Gebiet ("lr"). Leaflet wird erst beim ersten Öffnen geladen.
+
+  const SKI_TILES = "https://liftradar.eu/ski/v1/10";
+  const LEAFLET = {
+    js: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js",
+    jsSri: "sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==",
+    css: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css",
+    cssSri: "sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==",
+  };
+
+  // Lifttypen (OpenSkiData) in Anzeige-Reihenfolge
+  const LIFT_TYPES = {
+    cable_car: "Pendelbahn",
+    gondola: "Gondelbahn",
+    mixed_lift: "Kombibahn",
+    funicular: "Standseilbahn",
+    chair_lift: "Sessellift",
+    drag_lift: "Schlepplift",
+    "t-bar": "Schlepplift (Bügel)",
+    "j-bar": "Schlepplift (Anker)",
+    platter: "Tellerlift",
+    rope_tow: "Seillift",
+    magic_carpet: "Förderband",
+  };
+  // Zähler je Typ, wie LiftRadar sie meldet
+  const LR_LIFT_TYPES = {
+    cable_car: "Pendelbahnen", gondola: "Gondelbahnen", funicular: "Standseilbahnen", chairlift: "Sessellifte",
+    drag_lift: "Schlepplifte", carpet: "Förderbänder", other: "Sonstige",
+  };
+  // Pistenfarben wie auf österreichischen Pistenplänen
+  const RUN_STYLES = {
+    novice: { color: "#16a34a", label: "Sehr leicht" },
+    easy: { color: "#2563eb", label: "Leicht (blau)" },
+    intermediate: { color: "#dc2626", label: "Mittel (rot)" },
+    advanced: { color: "#111827", label: "Schwer (schwarz)" },
+    expert: { color: "#111827", label: "Sehr schwer", dash: "6 4" },
+    freeride: { color: "#ea580c", label: "Skiroute / Freeride", dash: "6 4" },
+    extreme: { color: "#ea580c", label: "Extrem", dash: "2 4" },
+  };
+  const RUN_UNKNOWN = { color: "#6b7280", label: "Ohne Angabe" };
+
+  let leafletReady = null;
+  function loadLeaflet() {
+    if (window.L) return Promise.resolve();
+    if (!leafletReady) {
+      leafletReady = new Promise((resolve, reject) => {
+        const css = Object.assign(document.createElement("link"), {
+          rel: "stylesheet", href: LEAFLET.css, integrity: LEAFLET.cssSri, crossOrigin: "anonymous",
+        });
+        const js = Object.assign(document.createElement("script"), {
+          src: LEAFLET.js, integrity: LEAFLET.jsSri, crossOrigin: "anonymous",
+        });
+        js.onload = resolve;
+        js.onerror = () => { leafletReady = null; reject(new Error("Kartenbibliothek nicht ladbar")); };
+        document.head.append(css, js);
+      });
+    }
+    return leafletReady;
+  }
+
+  const skiTileCache = {};
+  function skiTile(x, y) {
+    const u = `${SKI_TILES}/${x}/${y}.json`;
+    if (!skiTileCache[u]) {
+      // leere Kacheln gibt es nicht (404) – das ist kein Fehler
+      skiTileCache[u] = fetch(u).then((res) => (res.ok ? res.json() : null)).catch(() => null);
+    }
+    return skiTileCache[u];
+  }
+
+  // Lifte, Pisten und Umriss eines Gebiets aus der Kachel des Gebietspunkts und den 8 Nachbarn
+  async function loadSkiMap(r) {
+    const n = 2 ** 10;
+    const lat = (r.location.lat * Math.PI) / 180;
+    const x = Math.floor(((r.location.lon + 180) / 360) * n);
+    const y = Math.floor(((1 - Math.asinh(Math.tan(lat)) / Math.PI) / 2) * n);
+    const jobs = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) jobs.push(skiTile(x + dx, y + dy));
+    const tiles = (await Promise.all(jobs)).filter(Boolean);
+    const k = key(r);
+    // Elemente über Kachelgrenzen kommen mehrfach vor: nach OSM-id zusammenfassen, die längste Fassung behalten
+    const pick = (list, own) => {
+      const byId = new Map();
+      for (const f of list) {
+        if (!own(f)) continue;
+        const id = f.osm || JSON.stringify(f.c || f.outline).slice(0, 80);
+        const prev = byId.get(id);
+        if (!prev || (f.c || []).length > (prev.c || []).length) byId.set(id, f);
+      }
+      return [...byId.values()];
+    };
+    return {
+      lifts: pick(tiles.flatMap((t) => t.lifts || []), (f) => f.lr === k && f.c && f.c.length > 1),
+      runs: pick(tiles.flatMap((t) => t.runs || []),
+        (f) => f.lr === k && f.c && f.c.length > 1 && (f.uses || []).includes("downhill")),
+      areas: pick(tiles.flatMap((t) => t.areas || []), (f) => f.lr && f.lr.id === k && f.outline),
+    };
+  }
+
+  // Länge (m, entlang der Linie) und Höhen an den Enden
+  function liftGeo(c) {
+    let m = 0;
+    for (let i = 1; i < c.length; i++) {
+      m += distKm({ lat: c[i - 1][1], lon: c[i - 1][0] }, { lat: c[i][1], lon: c[i][0] }) * 1000;
+    }
+    const z = [c[0][2], c[c.length - 1][2]].filter((v) => v != null);
+    return { m, low: z.length ? Math.min(...z) : null, high: z.length ? Math.max(...z) : null };
+  }
+
+  function liftInfo(l) {
+    const g = liftGeo(l.c);
+    const type = LIFT_TYPES[l.type] || "Lift";
+    const kind = l.occupancy > 1 && ["chair_lift", "gondola", "mixed_lift"].includes(l.type)
+      ? `${l.occupancy}er-${type}` : type;
+    const extras = [l.bubble ? "Haube" : null, l.heating ? "Sitzheizung" : null,
+      l.capacity ? `${fmt(l.capacity)} Pers./h` : null].filter(Boolean);
+    return { name: l.name || type, kind, g, extras };
+  }
+
+  function liftLineText(i) {
+    const parts = [`${fmt(Math.round(i.g.m / 10) * 10)} m lang`];
+    if (i.g.low != null && i.g.high != null && i.g.high - i.g.low >= 5) {
+      parts.push(`${fmt(Math.round(i.g.low))} → ${fmt(Math.round(i.g.high))} m`);
+    }
+    return parts.concat(i.extras).join(" · ");
+  }
+
+  let detailMap = null;
+
+  function detailHeadHTML(r) {
+    const d = state.details[key(r)] || {};
+    const status = STATUS[r.status] || { label: r.status };
+    const updated = r.hist ? `Stand ${fmtDay(state.histDate)}` : (() => {
+      const t = fmtDateTime(d.lifts_updated_at || d.fetched_at || r.checked_at);
+      return t ? `Stand ${t}` : "";
+    })();
+    const l = r.lifts;
+    const s = r.slopes;
+    const byType = !r.hist && d.lifts_by_type
+      ? Object.entries(d.lifts_by_type)
+        .filter(([, v]) => v && v.total)
+        .map(([t, v]) => `<span class="type-chip">${esc(LR_LIFT_TYPES[t] || t)} <strong>${fmt(v.open)} / ${fmt(v.total)}</strong></span>`)
+        .join("")
+      : "";
+    const website = d.website ? ` · <a href="${esc(d.website)}" target="_blank" rel="noopener">Website</a>` : "";
+    return `<div class="detail-head">
+        <div>
+          <h2 id="detail-title">${esc(r.name)}</h2>
+          <div class="place">${esc(placeLabel(r))}${website}</div>
+          <div class="meta"><span class="badge ${esc(r.status)}">${esc(status.label)}</span>
+            ${updated ? `<span class="updated">${esc(updated)}</span>` : ""}</div>
+        </div>
+        <button type="button" class="detail-close" aria-label="Schließen" title="Schließen (Esc)">✕</button>
+      </div>
+      <div class="detail-stats">
+        <span class="type-chip">Lifte offen <strong>${l && l.total != null ? `${fmt(l.open)} / ${fmt(l.total)}` : "–"}</strong></span>
+        <span class="type-chip">Pisten offen <strong>${s && s.total_km != null ? `${fmt(s.open_km)} / ${fmt(s.total_km)} km`
+          : s && s.total != null ? `${fmt(s.open)} / ${fmt(s.total)}` : "–"}</strong></span>
+        ${byType}
+      </div>`;
+  }
+
+  async function openDetail(k) {
+    const base = state.resorts.find((r) => key(r) === k) || state.all.find((r) => key(r) === k);
+    if (!base || !base.location) return;
+    const r = state.histDate ? histView(base) : base;
+    const dlg = els.detail;
+    dlg.dataset.key = k;
+    dlg.innerHTML = `<div class="detail-inner">
+        ${detailHeadHTML(r)}
+        <div class="detail-map" id="detail-map"><div class="detail-msg">Lade Karte …</div></div>
+        <div class="map-legend" id="detail-legend"></div>
+        <div id="detail-lifts"></div>
+        <p class="detail-attr">Lifte &amp; Pisten: <a href="https://openskimap.org" target="_blank" rel="noopener">OpenSkiData</a>,
+          © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-Mitwirkende</a> (ODbL), über
+          <a href="https://liftradar.eu/api" target="_blank" rel="noopener">LiftRadar</a>.
+          Betriebszahlen je Lifttyp von LiftRadar; welcher Lift genau läuft, meldet die Quelle nicht.</p>
+      </div>`;
+    if (!dlg.open) dlg.showModal();
+    document.documentElement.classList.add("detail-open");
+
+    try {
+      const [, data] = await Promise.all([loadLeaflet(), loadSkiMap(base)]);
+      if (!dlg.open || dlg.dataset.key !== k) return; // inzwischen geschlossen oder anderes Gebiet
+      drawDetailMap(base, data);
+    } catch (err) {
+      console.warn(err);
+      const box = document.getElementById("detail-map");
+      if (box) box.innerHTML = `<div class="detail-msg">Die Karte konnte nicht geladen werden (${esc(err.message)}).</div>`;
+    }
+  }
+
+  function drawDetailMap(r, data) {
+    const box = document.getElementById("detail-map");
+    box.innerHTML = "";
+    if (detailMap) { detailMap.remove(); detailMap = null; }
+    const map = (detailMap = L.map(box, { scrollWheelZoom: true, zoomSnap: 0.5 }));
+    const topo = L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+      maxZoom: 17,
+      attribution: 'Karte: © <a href="https://opentopomap.org" target="_blank" rel="noopener">OpenTopoMap</a> (CC-BY-SA), © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+    });
+    const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende',
+    });
+    topo.addTo(map);
+    L.control.layers({ "Gelände (OpenTopoMap)": topo, "Straßenkarte (OSM)": osm }, null, { position: "topright" }).addTo(map);
+    L.control.scale({ imperial: false }).addTo(map);
+
+    const ll = (c) => c.map((p) => [p[1], p[0]]);
+    const bounds = L.latLngBounds([]);
+
+    for (const a of data.areas) {
+      const poly = L.polygon(a.outline.map(ll), {
+        color: "#1d6fb8", weight: 1.5, dashArray: "4 4", fillOpacity: 0.04, interactive: false,
+      }).addTo(map);
+      bounds.extend(poly.getBounds());
+    }
+
+    // Pisten nach Schwierigkeit, leichte zuerst (schwere liegen oben)
+    const order = ["novice", "easy", "intermediate", "advanced", "expert", "freeride", "extreme"];
+    const used = new Set();
+    [...data.runs]
+      .sort((a, b) => order.indexOf(a.difficulty) - order.indexOf(b.difficulty))
+      .forEach((run) => {
+        const st = RUN_STYLES[run.difficulty] || RUN_UNKNOWN;
+        used.add(st);
+        const line = L.polyline(ll(run.c), { color: st.color, weight: 3, opacity: 0.85, dashArray: st.dash });
+        line.bindTooltip(`${esc(run.name || (run.ref ? `Piste ${run.ref}` : "Piste"))} · ${esc(st.label)}`, { sticky: true });
+        line.addTo(map);
+        bounds.extend(line.getBounds());
+      });
+
+    // Lifte: dunkle Linie mit heller Kontur, Stationen als Punkte
+    const liftLayers = [];
+    const typeRank = (t) => {
+      const i = Object.keys(LIFT_TYPES).indexOf(t);
+      return i < 0 ? 99 : i;
+    };
+    const lifts = data.lifts
+      .map((l) => ({ l, info: liftInfo(l) }))
+      .sort((a, b) => typeRank(a.l.type) - typeRank(b.l.type) || a.info.name.localeCompare(b.info.name, "de"));
+    lifts.forEach(({ l, info }, i) => {
+      const pts = ll(l.c);
+      const casing = L.polyline(pts, { color: "#fff", weight: 6, opacity: 0.9, interactive: false });
+      const line = L.polyline(pts, { color: "#111827", weight: 3 });
+      const ends = [pts[0], pts[pts.length - 1]].map((p) =>
+        L.circleMarker(p, { radius: 3.5, color: "#111827", weight: 2, fillColor: "#fff", fillOpacity: 1, interactive: false }));
+      const group = L.featureGroup([casing, line, ...ends]).addTo(map);
+      line.bindPopup(`<strong>${esc(info.name)}</strong><br>${esc(info.kind)}<br><small>${esc(liftLineText(info))}</small>`);
+      line.bindTooltip(esc(info.name), { sticky: true });
+      liftLayers[i] = { group, line };
+      bounds.extend(group.getBounds());
+    });
+
+    const fit = () => {
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 15 });
+      else map.setView([r.location.lat, r.location.lon], 13);
+    };
+    fit();
+    if (!bounds.isValid()) L.circleMarker([r.location.lat, r.location.lon], { radius: 6, color: "#1d6fb8" }).addTo(map);
+    // Größe des Dialogs steht erst nach dem Layout fest: dann neu einpassen
+    setTimeout(() => { if (detailMap === map) { map.invalidateSize(); fit(); } }, 60);
+
+    // Legende
+    const styleRank = (st) => {
+      const i = Object.values(RUN_STYLES).indexOf(st);
+      return i < 0 ? 99 : i;
+    };
+    const swatch = (css) => `<i class="lg-sw"><i class="lg-line" style="${css}"></i></i>`;
+    const legend = [...used]
+      .sort((a, b) => styleRank(a) - styleRank(b))
+      .map((st) => `<span>${swatch(`border-top:3px ${st.dash ? "dashed" : "solid"} ${st.color}`)}${esc(st.label)}</span>`);
+    if (lifts.length) legend.unshift(`<span>${swatch("border-top:3px solid #111827")}Lift</span>`);
+    document.getElementById("detail-legend").innerHTML = legend.join("");
+
+    // Liftliste
+    const listBox = document.getElementById("detail-lifts");
+    if (!lifts.length) {
+      listBox.innerHTML = `<p class="detail-msg">Für dieses Skigebiet sind in OpenStreetMap noch keine Lifte eingetragen.</p>`;
+      return;
+    }
+    listBox.innerHTML = `<h3 class="detail-h3">Lifte (${lifts.length})</h3>
+      <ul class="lift-list">${lifts.map(({ info }, i) => `<li>
+          <button type="button" class="lift-item" data-i="${i}">
+            <span class="lift-name">${esc(info.name)}</span>
+            <span class="lift-sub">${esc(info.kind)} · ${esc(liftLineText(info))}</span>
+          </button></li>`).join("")}</ul>`;
+    listBox.onclick = (e) => {
+      const b = e.target.closest(".lift-item");
+      if (!b) return;
+      const layer = liftLayers[+b.dataset.i];
+      map.fitBounds(layer.group.getBounds(), { padding: [40, 40], maxZoom: 15 });
+      layer.line.openPopup(layer.line.getCenter());
+      box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+  }
+
+  els.detail.addEventListener("click", (e) => {
+    // Klick auf den abgedunkelten Hintergrund oder ✕ schließt
+    if (e.target === els.detail || e.target.closest(".detail-close")) els.detail.close();
+  });
+  els.detail.addEventListener("close", () => {
+    document.documentElement.classList.remove("detail-open");
+    if (detailMap) { detailMap.remove(); detailMap = null; }
+    els.detail.innerHTML = "";
+    const k = els.detail.dataset.key;
+    const back = k && els.rows.querySelector(`.lift-btn[data-key="${CSS.escape(k)}"]`);
+    if (back) back.focus();
+  });
+
   // ---------- Suche: weitere Skigebiete hinzufügen ----------
 
   const MAX_RESULTS = 8;
@@ -1537,6 +1858,8 @@
     if (remove) { removeResort(remove.dataset.key); return; }
     const add = e.target.closest(".add-btn");
     if (add) { addToList([add.dataset.key]); return; }
+    const lift = e.target.closest(".lift-btn");
+    if (lift) { openDetail(lift.dataset.key); return; }
 
     const btn = e.target.closest(".wx-toggle, .cam-toggle");
     if (!btn) return;

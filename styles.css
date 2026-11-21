@@ -520,3 +520,130 @@ select, .btn {
   .cam { flex: 0 0 86%; scroll-snap-align: start; }
   .cams .cam:only-child { flex-basis: 100%; }
 }
+
+/* Lifte-Zelle als Knopf zur Karte */
+.lift-btn {
+  display: block;
+  width: calc(100% + 14px);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 4px 6px;
+  margin: -5px -7px;
+  cursor: pointer;
+}
+.lift-btn:hover, .lift-btn:focus-visible { border-color: var(--border); background: var(--bg); }
+.lift-btn .count, .lift-btn .bar { display: block; }
+.lift-map { display: block; margin-top: 4px; color: var(--accent); font-size: 0.75rem; font-weight: 600; }
+
+/* Detailansicht (Dialog) */
+html.detail-open { overflow: hidden; }
+.detail {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+}
+.detail::backdrop { background: rgb(10 15 20 / 0.55); }
+.detail-inner { padding: 18px 20px 16px; }
+.detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.detail-head h2 { margin: 0 0 2px; font-size: 1.35rem; }
+.detail-close {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  font-size: 1rem;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.detail-close:hover { color: var(--text); border-color: var(--accent); }
+.detail-stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.type-chip {
+  font-size: 0.82rem;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.type-chip strong { color: var(--text); font-weight: 650; margin-left: 2px; }
+.detail-map {
+  height: min(62vh, 560px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bar-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.detail-map.leaflet-container { display: block; }
+.detail-msg { color: var(--muted); font-size: 0.9rem; padding: 12px; }
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 2px 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+/* Farbfeld auf hellem Grund wie die Karte, damit auch Schwarz im Dunkelmodus sichtbar ist */
+.lg-sw { display: inline-flex; align-items: center; background: #f1f5f9; border-radius: 3px; padding: 4px 4px; }
+.lg-line { display: inline-block; width: 22px; height: 0; }
+.detail-h3 { font-size: 1rem; margin: 18px 0 8px; }
+.lift-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 6px;
+}
+.lift-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.lift-item:hover, .lift-item:focus-visible { border-color: var(--accent); }
+.lift-name { display: block; font-weight: 600; font-size: 0.88rem; }
+.lift-sub { display: block; color: var(--muted); font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+.detail-attr { color: var(--muted); font-size: 0.75rem; margin: 14px 0 0; }
+.detail .leaflet-container { font: inherit; font-size: 0.8rem; }
+@media (prefers-color-scheme: dark) {
+  /* helle Karte im Dunkelmodus etwas abdunkeln */
+  .detail .leaflet-tile-pane { filter: brightness(0.82) contrast(1.05); }
+}
+
+@media (max-width: 760px) {
+  .detail {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+  }
+  .detail-inner { padding: 14px 14px 20px; }
+  .detail-map { height: 58vh; }
+  .lift-btn { margin: 0; width: 100%; padding: 0; }
+}
