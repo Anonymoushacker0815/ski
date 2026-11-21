@@ -1413,7 +1413,7 @@
 
   // Pistenfarben wie auf österreichischen Pistenplänen
   const RUN_STYLES = {
-    novice: { color: "#16a34a", label: "Sehr leicht" },
+    novice: { color: "#60a5fa", label: "Sehr leicht (hellblau)" }, // nicht grün: grün = offener Lift
     easy: { color: "#2563eb", label: "Leicht (blau)" },
     intermediate: { color: "#dc2626", label: "Mittel (rot)" },
     advanced: { color: "#111827", label: "Schwer (schwarz)" },
