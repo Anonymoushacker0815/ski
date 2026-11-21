@@ -429,6 +429,12 @@ select, .btn {
 .cam:hover .cam-name { color: var(--accent); }
 .cam-sub { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
 .cam-stale { color: var(--warn); font-weight: 600; }
+/* Windy: Bilder nur in Original- oder kleinerer Größe (Nutzungsbedingungen), Vorschau max. 400 px */
+.cams.windy { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); margin-top: 10px; }
+.cams.windy .cam { max-width: 400px; }
+.cams.windy .cam-media { aspect-ratio: auto; }
+.cams.windy .cam-media img { height: auto; }
+.windy-sec > .cam-empty { display: block; margin-top: 10px; }
 .cam-links { margin-top: 10px; font-size: 0.85rem; }
 .cam-links small { color: var(--muted); }
 .cam-note { margin-top: 8px; color: var(--muted); font-size: 0.75rem; }

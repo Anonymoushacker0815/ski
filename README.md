@@ -12,8 +12,9 @@ Mit 📷 klappen Webcams in der Nähe eines Skigebiets auf. Die Zuordnung erzeug
 
 - **[Panomax](https://www.panomax.com):** 360°-Panoramen, direkt eingebettet. Aufnahmezeit und Archivbilder kommen aus der offenen Panomax-API; bei einem vergangenen Datum zeigt die Seite das Bild von ca. 12 Uhr. Klick öffnet die 360°-Ansicht bei Panomax.
 - **[foto-webcam.eu](https://www.foto-webcam.eu):** nur als Link (die Bilder dürfen laut Betreiber nicht übernommen werden), historisch direkt ins Archiv um 12 Uhr.
+- **[Windy](https://api.windy.com/webcams/docs):** größte Sammlung, u. a. feratel-Kameras (Nassfeld, Katschberg-Aineck, Gerlitzen, Serfaus-Fiss-Ladis …). Wird beim Aufklappen live abgefragt (Umkreis 5 km, max. 6 Bilder), weil die Bildadressen der Gratis-Stufe nur ca. 10 Minuten gelten. Nur aktuelle Bilder, kein Archiv. Laut [Nutzungsbedingungen](https://api.windy.com/webcams/terms) verlinkt jedes Bild auf die Windy-Seite der Kamera, die Bilder werden nicht größer als 400 px gezeigt und der Hinweis „Webcams provided by windy.com“ steht darunter. Der API-Schlüssel steht in `app.js` (`WINDY_KEY`) – bei einer statischen Seite zwangsläufig öffentlich; leer lassen schaltet Windy ab.
 
-Viele Skigebiete (z. B. Nassfeld, Katschberg, Petzen) nutzen Kameras ohne offene Schnittstelle – dort gibt es keinen 📷-Knopf. Zuordnung neu erzeugen:
+Zuordnung für Panomax und foto-webcam.eu neu erzeugen:
 
 ```bash
 python3 scripts/build_webcams.py

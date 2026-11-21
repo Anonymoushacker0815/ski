@@ -79,6 +79,14 @@
   // foto-webcam.eu nur verlinkt (deren Bilder dürfen nicht übernommen werden).
   const PANOMAX_API = "https://api.panomax.com/1.0";
   const PANOMAX_LIVE = "https://live-image.panomax.com/cams";
+  // Windy-Webcams (u. a. feratel-Kameras): werden beim Aufklappen live abgefragt, weil die
+  // Bildadressen in der Gratis-Stufe nur ~10 Minuten gelten. Der Schlüssel ist zwangsläufig
+  // öffentlich (statische Seite). Leer = Windy aus.
+  const WINDY_KEY = "rcuSqjkSoPQBEPssI4TafzJrHoe7iGV0";
+  const WINDY_API = "https://api.windy.com/webcams/api/v3/webcams";
+  const WINDY_RADIUS_KM = 5;
+  const WINDY_MAX = 6;
+  const WINDY_TTL = 8 * 60 * 1000;
 
   // WMO-Wettercodes (Open-Meteo) -> Symbol + Text
   const WMO = [
@@ -143,6 +151,7 @@
     camsOpen: new Set(), // Schlüssel mit aufgeklappten Webcams
     camData: {}, // "camId|live" bzw. "camId|JJJJ-MM-TT" -> { date, time, small, opt, reduced } oder null
     camStamp: 0, // 5-Minuten-Takt, damit "Aktualisieren" frische Livebilder holt
+    windy: {}, // Schlüssel -> { t, cams: [...], error } (Windy, nur aktuell)
   };
 
   // Eindeutiger Schlüssel pro Skigebiet (auch Adresse der Einzelmeldung)
@@ -564,6 +573,7 @@
       searchIndex = null; // neu aufbauen mit frischen Daten
       searchHint();
       state.camStamp = Math.floor(Date.now() / 300000);
+      state.windy = {};
       for (const k of Object.keys(state.camData)) if (k.endsWith("|live")) delete state.camData[k];
       render();
 
@@ -919,14 +929,134 @@
     return list.map(([id, km]) => ({ ...w.cams[id], id, km })).filter((c) => c.s);
   }
 
+  // Windy nur für aktuelle Bilder (kein Archiv) und nur mit Schlüssel
+  const windyOn = (r) => !!WINDY_KEY && !state.histDate && !!r.location;
+  const hasCams = (r) => camsOf(r).length > 0 || windyOn(r);
+
+  function camLabel(r) {
+    const w = windyOn(r) ? state.windy[key(r)] : null;
+    const n = camsOf(r).length + (w && w.cams ? w.cams.length : 0);
+    return n ? `${n} Webcam${n > 1 ? "s" : ""}` : "Webcams";
+  }
+
   function camButton(r, isOpen) {
-    const n = camsOf(r).length;
-    if (!n) return "";
+    if (!hasCams(r)) return "";
     return `<button type="button" class="cam-toggle" data-key="${esc(key(r))}" aria-expanded="${isOpen}">
         <span aria-hidden="true">📷</span>
-        <span>${n} Webcam${n > 1 ? "s" : ""}</span>
+        <span class="cam-count">${camLabel(r)}</span>
         <span class="wx-more">${isOpen ? "▴" : "▾"}</span>
       </button>`;
+  }
+
+  function distKm(a, b) {
+    const p = Math.PI / 180;
+    const x = Math.sin(((b.lat - a.lat) * p) / 2) ** 2 +
+      Math.cos(a.lat * p) * Math.cos(b.lat * p) * Math.sin(((b.lon - a.lon) * p) / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(x));
+  }
+
+  // Kameras, die schon über Panomax/foto-webcam.eu kommen, nicht doppelt zeigen
+  const KNOWN_PROVIDERS = /panomax\.com|foto-webcam\.eu/i;
+
+  function parseWindy(r, d) {
+    return ((d && d.webcams) || [])
+      .filter((w) => (!w.status || w.status === "active") && w.images && w.images.current && w.images.current.preview)
+      .filter((w) => !KNOWN_PROVIDERS.test((w.urls && w.urls.provider) || ""))
+      .map((w) => {
+        const size = (w.images.sizes && w.images.sizes.preview) || {};
+        const loc = w.location || {};
+        const t = w.lastUpdatedOn ? new Date(w.lastUpdatedOn) : null;
+        // Titel "Gemeinde › Richtung: Name" -> "Name"
+        const title = w.title || loc.city || "Webcam";
+        const cut = title.indexOf(": ");
+        return {
+          id: w.webcamId,
+          title,
+          name: cut > 0 ? title.slice(cut + 2) : title,
+          img: w.images.current.preview,
+          w: size.width || 400,
+          h: size.height || 224,
+          link: (w.urls && w.urls.detail) || `https://www.windy.com/webcams/${w.webcamId}`,
+          date: t && !isNaN(t) ? viennaDay(t) : null,
+          time: t && !isNaN(t)
+            ? t.toLocaleTimeString("de-AT", { timeZone: "Europe/Vienna", hour: "2-digit", minute: "2-digit" })
+            : null,
+          km: loc.latitude != null ? distKm(r.location, { lat: loc.latitude, lon: loc.longitude }) : null,
+        };
+      })
+      .sort((a, b) => (a.km ?? 99) - (b.km ?? 99))
+      // dieselbe Kamera kommt oft über zwei Anbieter (z. B. feratel und Skigebiet): nach Kameranamen ausdünnen
+      .filter(function (c) {
+        const id = c.name.split(" - ").pop().trim().toLowerCase();
+        if (this.has(id)) return false;
+        this.add(id);
+        return true;
+      }, new Set())
+      .slice(0, WINDY_MAX);
+  }
+
+  const windyPending = new Set();
+  function fetchWindy(r) {
+    const k = key(r);
+    const have = state.windy[k];
+    if (windyPending.has(k) || (have && Date.now() - have.t < WINDY_TTL)) return;
+    windyPending.add(k);
+    const params = new URLSearchParams({
+      nearby: `${r.location.lat},${r.location.lon},${WINDY_RADIUS_KM}`,
+      include: "images,location,urls",
+      limit: "25",
+    });
+    fetch(`${WINDY_API}?${params}`, { headers: { "x-windy-api-key": WINDY_KEY } })
+      .then((res) => {
+        if (!res.ok) throw new Error(`${res.status} bei Windy`);
+        return res.json();
+      })
+      .then(
+        (d) => ({ t: Date.now(), cams: parseWindy(r, d) }),
+        (err) => {
+          console.warn("Windy-Webcams nicht ladbar:", err);
+          return { t: Date.now(), cams: [], error: true };
+        }
+      )
+      .then((v) => {
+        windyPending.delete(k);
+        state.windy[k] = v;
+        updateWindy(r);
+      });
+  }
+
+  // Windy-Teil und Zähler im Knopf an Ort und Stelle erneuern
+  function updateWindy(r) {
+    const sel = `[data-key="${CSS.escape(key(r))}"]`;
+    const sec = els.rows.querySelector(`.windy-sec${sel}`);
+    if (sec) sec.outerHTML = windySectionHTML(r);
+    const cnt = els.rows.querySelector(`.cam-toggle${sel} .cam-count`);
+    if (cnt) cnt.textContent = camLabel(r);
+  }
+
+  function windyTileHTML(c) {
+    const dist = c.km == null ? null : c.km < 1 ? "< 1 km" : `${fmt(Math.round(c.km))} km`;
+    return `<a class="cam" href="${esc(c.link)}" target="_blank" rel="noopener" title="${esc(c.title)} – bei Windy öffnen">
+        <span class="cam-media"><img src="${esc(c.img)}" alt="${esc(`Webcam ${c.name}`)}" loading="lazy"
+          width="${esc(c.w)}" height="${esc(c.h)}"></span>
+        <span class="cam-cap">
+          <span class="cam-name">${esc(c.name)}</span>
+          <span class="cam-sub">${dist || ""}${c.date ? liveTimeHTML(c.date, c.time) : ""}</span>
+        </span>
+      </a>`;
+  }
+
+  function windySectionHTML(r) {
+    const w = state.windy[key(r)];
+    let body = "";
+    if (!w) body = '<div class="cam-empty">Lade Webcams von Windy …</div>';
+    else if (w.error) body = '<div class="cam-empty">Windy-Webcams gerade nicht erreichbar.</div>';
+    else if (w.cams.length) {
+      body = `<div class="cams windy">${w.cams.map(windyTileHTML).join("")}</div>
+        <div class="cam-note">Webcams provided by <a href="https://www.windy.com/" target="_blank" rel="noopener">windy.com</a>
+          — <a href="https://www.windy.com/webcams/add" target="_blank" rel="noopener">add a webcam</a></div>`;
+    } else if (!camsOf(r).length) body = '<div class="cam-empty">Keine Webcams in der Nähe gefunden.</div>';
+    return `<div class="windy-sec" data-key="${esc(key(r))}">${body}</div>`;
   }
 
   const camDataKey = (cam, day) => `${cam}|${day || "live"}`;
@@ -977,6 +1107,7 @@
     for (const r of list) {
       if (!state.camsOpen.has(key(r))) continue;
       for (const c of camsOf(r)) if (c.s === "p") fetchCam(c.cam, state.histDate);
+      if (windyOn(r)) fetchWindy(r);
     }
   }
 
@@ -1012,12 +1143,16 @@
     const d = state.camData[camDataKey(c.cam, day)];
     if (!d) return "";
     if (day) return ` · ${d.time} Uhr`;
+    return liveTimeHTML(d.date, d.time);
+  }
+
+  // Aufnahmezeit eines Livebilds; älter als gestern = Kamera hängt vermutlich
+  function liveTimeHTML(date, time) {
     const today = todayStr();
-    const yesterday = shiftDate(today, -1);
-    if (d.date === today) return ` · heute ${d.time}`;
-    if (d.date === yesterday) return ` · gestern ${d.time}`;
-    const [, m, dd] = d.date.split("-");
-    return ` · <span class="cam-stale" title="Die Kamera liefert derzeit keine neuen Bilder">zuletzt ${dd}.${m}. ${d.time}</span>`;
+    if (date === today) return ` · heute ${time}`;
+    if (date === shiftDate(today, -1)) return ` · gestern ${time}`;
+    const [, m, dd] = date.split("-");
+    return ` · <span class="cam-stale" title="Die Kamera liefert derzeit keine neuen Bilder">zuletzt ${dd}.${m}. ${time}</span>`;
   }
 
   function camTileHTML(c, day) {
@@ -1044,14 +1179,16 @@
       `<a href="${esc(fwLink(c))}" target="_blank" rel="noopener" title="${esc(c.t || c.n)}">${esc(c.n)}</a>` +
       (c.e ? ` <small>${fmt(c.e)} m</small>` : "")
     ).join(" · ");
+    const windy = windyOn(r);
     const head = day ? `Webcams am ${esc(fmtDay(day))} – Bild um ca. 12 Uhr`
-      : pano.length ? "Webcams in der Nähe – aktuelles Bild" : "Webcams in der Nähe";
+      : pano.length || windy ? "Webcams in der Nähe – aktuelles Bild" : "Webcams in der Nähe";
     return `<tr class="cam-row">
         <td colspan="6">
           <div class="wx-head">${head}</div>
           ${pano.length ? `<div class="cams">${pano.map((c) => camTileHTML(c, day)).join("")}</div>` : ""}
-          ${fw.length ? `<div class="cam-links">${pano.length ? "Weitere" : "Webcams"} auf foto-webcam.eu${day ? " (Archiv, 12 Uhr)" : ""}: ${links}</div>` : ""}
           ${pano.length ? '<div class="cam-note">Panoramen: Panomax · Klick öffnet die 360°-Ansicht</div>' : ""}
+          ${windy ? windySectionHTML(r) : ""}
+          ${fw.length ? `<div class="cam-links">${pano.length || windy ? "Weitere" : "Webcams"} auf foto-webcam.eu${day ? " (Archiv, 12 Uhr)" : ""}: ${links}</div>` : ""}
         </td>
       </tr>`;
   }
@@ -1066,7 +1203,7 @@
     const hist = r.hist;
     const updated = hist ? null : fmtDateTime(d.lifts_updated_at || d.fetched_at || r.checked_at);
     const isOpen = !hist && state.expanded.has(key(r)) && !!state.weather[key(r)];
-    const camOpen = state.camsOpen.has(key(r)) && camsOf(r).length > 0;
+    const camOpen = state.camsOpen.has(key(r)) && hasCams(r);
 
     // Herkunft der Werte im historischen Modus
     let sourceText = "";
