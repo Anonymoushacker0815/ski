@@ -338,7 +338,7 @@ select, .btn {
 .bar > span { display: block; height: 100%; background: var(--open); border-radius: 3px; }
 
 /* Wetter */
-.wx-toggle {
+.wx-toggle, .cam-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -353,13 +353,14 @@ select, .btn {
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
-.wx-toggle:hover { border-color: var(--accent); }
-.wx-toggle[aria-expanded="true"] { border-color: var(--accent); }
+.wx-toggle { margin-right: 6px; }
+.wx-toggle:hover, .cam-toggle:hover { border-color: var(--accent); }
+.wx-toggle[aria-expanded="true"], .cam-toggle[aria-expanded="true"] { border-color: var(--accent); }
 .wx-more { color: var(--accent); font-weight: 600; }
 .wx-snowsum { color: var(--snow); font-weight: 600; }
 
 .resorts tr.is-expanded td { border-bottom: none; }
-.wx-row td { background: var(--wx-bg); padding-top: 10px; padding-bottom: 14px; }
+.wx-row td, .cam-row td { background: var(--wx-bg); padding-top: 10px; padding-bottom: 14px; }
 .wx-head { color: var(--muted); font-size: 0.8rem; margin-bottom: 8px; }
 .wx-days {
   display: grid;
@@ -397,6 +398,40 @@ select, .btn {
 .wx-wind.strong, .wx-wind.strong .wx-gust { color: var(--warn); font-weight: 600; }
 .wx-wind.strong .wx-arrow { color: var(--warn); }
 .wx-precip.none, .wx-snow.none, .wx-wind.none, .wx-sun.none { color: var(--muted); font-weight: 400; }
+
+/* Webcams */
+.cams {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 10px;
+}
+.cam {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+}
+.cam:hover { border-color: var(--accent); }
+.cam-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 515 / 150;
+  background: var(--bar-bg);
+}
+.cam-media img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cam-empty { color: var(--muted); font-size: 0.8rem; }
+.cam-cap { display: block; padding: 6px 9px 7px; font-size: 0.82rem; }
+.cam-name { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cam:hover .cam-name { color: var(--accent); }
+.cam-sub { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.cam-stale { color: var(--warn); font-weight: 600; }
+.cam-links { margin-top: 10px; font-size: 0.85rem; }
+.cam-links small { color: var(--muted); }
+.cam-note { margin-top: 8px; color: var(--muted); font-size: 0.75rem; }
 
 .legend { color: var(--muted); font-size: 0.85rem; margin: 14px 0 28px; }
 .warn-text { color: var(--warn); font-weight: 600; }
@@ -443,7 +478,7 @@ select, .btn {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
   }
-  .resorts tbody tr.wx-row {
+  .resorts tbody tr.wx-row, .resorts tbody tr.cam-row {
     display: block;
     padding: 0;
     margin-top: -1px;
@@ -452,7 +487,13 @@ select, .btn {
     border-top-right-radius: 0;
     overflow: hidden;
   }
-  .resorts tr.wx-row td { padding: 10px 14px 14px; border: none; }
+  .resorts tr.wx-row td, .resorts tr.cam-row td { padding: 10px 14px 14px; border: none; }
+  /* Prognose und Webcams gleichzeitig offen: beide hängen aneinander */
+  .resorts tbody tr.wx-row.joined {
+    margin-bottom: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
   .wx-days {
     display: flex;
     overflow-x: auto;
@@ -460,4 +501,13 @@ select, .btn {
     padding-bottom: 4px;
   }
   .wx-day { flex: 0 0 84px; scroll-snap-align: start; }
+  /* Webcams seitlich wischen, die nächste schaut an */
+  .cams {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding-bottom: 4px;
+  }
+  .cam { flex: 0 0 86%; scroll-snap-align: start; }
+  .cams .cam:only-child { flex-basis: 100%; }
 }

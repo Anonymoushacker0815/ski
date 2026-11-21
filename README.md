@@ -1,10 +1,25 @@
 # Ski
 
-Statische Webapp (HTML/CSS/JS, kein Build): deine Skigebiete auf einen Blick – Schneehöhe, offene Lifte und Pisten, 7-Tage-Wetter und historischer Schneestand.
+Statische Webapp (HTML/CSS/JS, kein Build): deine Skigebiete auf einen Blick – Schneehöhe, offene Lifte und Pisten, 7-Tage-Wetter, Webcams und historischer Schneestand.
 
 Beim ersten Besuch zeigt die Seite die 10 größten Skigebiete Österreichs (nach Pisten-km). Über das Suchfeld lassen sich beliebige Skigebiete aus dem LiftRadar-Bestand (ganz Europa) hinzufügen, mit ✕ entfernen und die Liste wieder auf die Top 10 zurücksetzen. Die Liste wird im `localStorage` des Browsers gespeichert.
 
 Über „Anzeigen“ lässt sich statt der eigenen Liste ein Skipass wählen, z. B. der Kärntner Skipass, Dolomiti Superski, Ski amadé oder der Zillertaler Superskipass. Die Pässe kommen aus [LiftRadar](https://liftradar.eu/json/groups.json); der Kärntner Skipass ist in `app.js` (`CUSTOM_PASSES`) nach [kaerntner-skipass.com](https://www.kaerntner-skipass.com/skigebiete/) gepflegt. Einzelne Gebiete eines Passes lassen sich mit ＋ in die eigene Liste übernehmen. Jede Pass-Ansicht hat einen eigenen Link zum Teilen, z. B. `…/ski/#kaerntner-skipass`.
+
+## Webcams
+
+Mit 📷 klappen Webcams in der Nähe eines Skigebiets auf. Die Zuordnung erzeugt `scripts/build_webcams.py` (Kameras bis 5 km um den Gebietspunkt, bis 12 km, wenn der Gebietsname im Kameranamen vorkommt) und schreibt sie nach `data/webcams.json`:
+
+- **[Panomax](https://www.panomax.com):** 360°-Panoramen, direkt eingebettet. Aufnahmezeit und Archivbilder kommen aus der offenen Panomax-API; bei einem vergangenen Datum zeigt die Seite das Bild von ca. 12 Uhr. Klick öffnet die 360°-Ansicht bei Panomax.
+- **[foto-webcam.eu](https://www.foto-webcam.eu):** nur als Link (die Bilder dürfen laut Betreiber nicht übernommen werden), historisch direkt ins Archiv um 12 Uhr.
+
+Viele Skigebiete (z. B. Nassfeld, Katschberg, Petzen) nutzen Kameras ohne offene Schnittstelle – dort gibt es keinen 📷-Knopf. Zuordnung neu erzeugen:
+
+```bash
+python3 scripts/build_webcams.py
+```
+
+Der GitHub-Workflow macht das bei jeder Erfassung mit.
 
 ## Starten
 

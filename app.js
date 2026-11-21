@@ -74,6 +74,12 @@
   const ARCHIVE_MIN = "1940-01-01";
   const OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive";
 
+  // Webcams: Zuordnung Skigebiet -> Kameras kommt aus data/webcams.json (scripts/build_webcams.py).
+  // Panomax-Panoramen werden eingebettet (Aufnahmezeit und Archiv über die offene API),
+  // foto-webcam.eu nur verlinkt (deren Bilder dürfen nicht übernommen werden).
+  const PANOMAX_API = "https://api.panomax.com/1.0";
+  const PANOMAX_LIVE = "https://live-image.panomax.com/cams";
+
   // WMO-Wettercodes (Open-Meteo) -> Symbol + Text
   const WMO = [
     [[0], "☀️", "Klar"],
@@ -131,6 +137,12 @@
     ownDays: {}, // Datum -> eigener Snapshot (oder null)
     lrHistory: {}, // Schlüssel -> LiftRadar-Verlauf (Spalten) oder null
     archive: {}, // Datum -> { Schlüssel -> { snowCm, snowfallCm, elevation } }
+
+    // Webcams
+    webcams: null, // { cams: { id -> Kamera }, resorts: { Schlüssel -> [[id, km], ...] } }
+    camsOpen: new Set(), // Schlüssel mit aufgeklappten Webcams
+    camData: {}, // "camId|live" bzw. "camId|JJJJ-MM-TT" -> { date, time, small, opt, reduced } oder null
+    camStamp: 0, // 5-Minuten-Takt, damit "Aktualisieren" frische Livebilder holt
   };
 
   // Eindeutiger Schlüssel pro Skigebiet (auch Adresse der Einzelmeldung)
@@ -551,14 +563,17 @@
       els.search.disabled = false;
       searchIndex = null; // neu aufbauen mit frischen Daten
       searchHint();
+      state.camStamp = Math.floor(Date.now() / 300000);
+      for (const k of Object.keys(state.camData)) if (k.endsWith("|live")) delete state.camData[k];
       render();
 
-      // Details, Wetter und (falls ein Datum gewählt ist) Verlauf parallel nachladen
+      // Details, Wetter, Webcams und (falls ein Datum gewählt ist) Verlauf parallel nachladen
       state.ownDays = {};
       state.lrHistory = {};
       await Promise.all([
         loadDetails(state.resorts),
         loadWeather(state.resorts),
+        loadWebcams(),
         loadOwnIndex().then(() => loadHistory(state.resorts)),
       ]);
       state.histLoading = false;
@@ -700,6 +715,7 @@
       return;
     }
     els.rows.innerHTML = list.map(rowHTML).join("");
+    requestCamData(list);
   }
 
   function renderHeader() {
@@ -847,7 +863,7 @@
       </button>`;
   }
 
-  function weatherRowHTML(r) {
+  function weatherRowHTML(r, joined) {
     const w = state.weather[key(r)];
     if (!w || !w.days.length) return "";
     const elev = w.elevation != null ? ` für ${fmt(Math.round(w.elevation))} m` : "";
@@ -877,10 +893,165 @@
           ${windHTML(d)}
         </div>`;
     }).join("");
-    return `<tr class="wx-row">
+    return `<tr class="wx-row${joined ? " joined" : ""}">
         <td colspan="6">
           <div class="wx-head">7-Tage-Prognose${elev}${now}</div>
           <div class="wx-days">${days}</div>
+        </td>
+      </tr>`;
+  }
+
+  // ---------- Webcams ----------
+
+  async function loadWebcams() {
+    if (state.webcams) return;
+    try {
+      state.webcams = await getJSON("data/webcams.json");
+    } catch (_) {
+      state.webcams = { cams: {}, resorts: {} }; // z. B. per file:// geöffnet
+    }
+  }
+
+  // Kameras eines Gebiets, Panomax zuerst (so liefert sie build_webcams.py)
+  function camsOf(r) {
+    const w = state.webcams;
+    const list = (w && w.resorts && w.resorts[key(r)]) || [];
+    return list.map(([id, km]) => ({ ...w.cams[id], id, km })).filter((c) => c.s);
+  }
+
+  function camButton(r, isOpen) {
+    const n = camsOf(r).length;
+    if (!n) return "";
+    return `<button type="button" class="cam-toggle" data-key="${esc(key(r))}" aria-expanded="${isOpen}">
+        <span aria-hidden="true">📷</span>
+        <span>${n} Webcam${n > 1 ? "s" : ""}</span>
+        <span class="wx-more">${isOpen ? "▴" : "▾"}</span>
+      </button>`;
+  }
+
+  const camDataKey = (cam, day) => `${cam}|${day || "live"}`;
+  const toMinutes = (t) => {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  };
+
+  // Bilderliste eines Tages (Panomax) -> neuestes Bild bzw. historisch das um 12 Uhr
+  function parseCamDay(cam, d, day) {
+    const imgs = (d && Array.isArray(d.images) ? d.images : []).filter((i) => i.time && i.available !== false);
+    if (!d || !d.date || !d.storage || !imgs.length || (day && d.date !== day)) return null;
+    const pick = day
+      ? imgs.reduce((a, b) => (Math.abs(toMinutes(b.time) - 720) < Math.abs(toMinutes(a.time) - 720) ? b : a))
+      : imgs[imgs.length - 1];
+    const [y, m, dd] = d.date.split("-");
+    const base = `https://panodata${d.storage}.panomax.com/cams/${cam}/${y}/${m}/${dd}/${pick.time.replace(/:/g, "-")}`;
+    return {
+      date: d.date,
+      time: pick.time.slice(0, 5),
+      small: `${base}_small.jpg`,
+      opt: `${base}_optimized.jpg`,
+      reduced: `${base}_reduced.jpg`,
+    };
+  }
+
+  const camPending = new Set();
+  function fetchCam(cam, day) {
+    const k = camDataKey(cam, day);
+    if (k in state.camData || camPending.has(k)) return;
+    if (day && day < "2010-01-01") { // vor den ersten Panomax-Bildern: gar nicht erst fragen
+      state.camData[k] = null;
+      return;
+    }
+    camPending.add(k);
+    getJSON(`${PANOMAX_API}/cams/${cam}/images/day${day ? `/${day}` : ""}`)
+      .then((d) => parseCamDay(cam, d, day), () => null) // z. B. 422 = an dem Tag keine Bilder
+      .then((v) => {
+        camPending.delete(k);
+        state.camData[k] = v;
+        updateCamTiles(cam);
+      });
+  }
+
+  // Aufnahmezeiten (und historisch die Bild-Adressen) der aufgeklappten Kameras laden
+  function requestCamData(list) {
+    if (!state.camsOpen.size) return;
+    for (const r of list) {
+      if (!state.camsOpen.has(key(r))) continue;
+      for (const c of camsOf(r)) if (c.s === "p") fetchCam(c.cam, state.histDate);
+    }
+  }
+
+  // Nur die betroffenen Kacheln anpassen, ohne die Tabelle (und alle Bilder) neu aufzubauen
+  function updateCamTiles(cam) {
+    const c = state.webcams && state.webcams.cams[`p${cam}`];
+    if (!c) return;
+    els.rows.querySelectorAll(`.cam[data-cam="${cam}"]`).forEach((el) => {
+      if (state.histDate) el.querySelector(".cam-media").innerHTML = camMediaHTML(c, state.histDate);
+      el.querySelector(".cam-time").innerHTML = camTimeHTML(c, state.histDate);
+    });
+  }
+
+  const CAM_SIZES = "(max-width: 760px) 100vw, 360px";
+  function camImg(alt, small, opt, reduced) {
+    return `<img src="${esc(small)}" srcset="${esc(small)} 515w, ${esc(opt)} 1030w, ${esc(reduced)} 1545w"
+      sizes="${CAM_SIZES}" alt="${esc(alt)}" loading="lazy" width="515" height="150">`;
+  }
+
+  function camMediaHTML(c, day) {
+    const alt = `Webcam ${c.n}`;
+    if (!day) {
+      const u = (size) => `${PANOMAX_LIVE}/${c.cam}/recent_${size}.jpg?t=${state.camStamp}`;
+      return camImg(alt, u("small"), u("optimized"), u("reduced"));
+    }
+    const d = state.camData[camDataKey(c.cam, day)];
+    if (d === undefined) return '<span class="cam-empty">Lade Bild …</span>';
+    if (!d) return '<span class="cam-empty">Kein Bild von diesem Tag</span>';
+    return camImg(alt, d.small, d.opt, d.reduced);
+  }
+
+  function camTimeHTML(c, day) {
+    const d = state.camData[camDataKey(c.cam, day)];
+    if (!d) return "";
+    if (day) return ` · ${d.time} Uhr`;
+    const today = todayStr();
+    const yesterday = shiftDate(today, -1);
+    if (d.date === today) return ` · heute ${d.time}`;
+    if (d.date === yesterday) return ` · gestern ${d.time}`;
+    const [, m, dd] = d.date.split("-");
+    return ` · <span class="cam-stale" title="Die Kamera liefert derzeit keine neuen Bilder">zuletzt ${dd}.${m}. ${d.time}</span>`;
+  }
+
+  function camTileHTML(c, day) {
+    const dist = c.km < 1 ? "< 1 km" : `${fmt(Math.round(c.km))} km`;
+    const sub = [c.e ? `${fmt(c.e)} m` : null, dist].filter(Boolean).join(" · ");
+    return `<a class="cam" data-cam="${esc(c.cam)}" href="${esc(c.u)}" target="_blank" rel="noopener"
+        title="${esc(c.n)} – 360°-Ansicht bei Panomax öffnen">
+        <span class="cam-media">${camMediaHTML(c, day)}</span>
+        <span class="cam-cap">
+          <span class="cam-name">${esc(c.n)}</span>
+          <span class="cam-sub">${sub}<span class="cam-time">${camTimeHTML(c, day)}</span></span>
+        </span>
+      </a>`;
+  }
+
+  function camRowHTML(r) {
+    const day = state.histDate;
+    const cams = camsOf(r);
+    const pano = cams.filter((c) => c.s === "p");
+    const fw = cams.filter((c) => c.s === "f");
+    // foto-webcam.eu hat ein Archiv mit Adressen der Form /webcam/<id>/JJJJ/MM/TT/HHMM
+    const fwLink = (c) => (day ? `https://www.foto-webcam.eu/webcam/${encodeURIComponent(c.fid)}/${day.replace(/-/g, "/")}/1200` : c.u);
+    const links = fw.map((c) =>
+      `<a href="${esc(fwLink(c))}" target="_blank" rel="noopener" title="${esc(c.t || c.n)}">${esc(c.n)}</a>` +
+      (c.e ? ` <small>${fmt(c.e)} m</small>` : "")
+    ).join(" · ");
+    const head = day ? `Webcams am ${esc(fmtDay(day))} – Bild um ca. 12 Uhr`
+      : pano.length ? "Webcams in der Nähe – aktuelles Bild" : "Webcams in der Nähe";
+    return `<tr class="cam-row">
+        <td colspan="6">
+          <div class="wx-head">${head}</div>
+          ${pano.length ? `<div class="cams">${pano.map((c) => camTileHTML(c, day)).join("")}</div>` : ""}
+          ${fw.length ? `<div class="cam-links">${pano.length ? "Weitere" : "Webcams"} auf foto-webcam.eu${day ? " (Archiv, 12 Uhr)" : ""}: ${links}</div>` : ""}
+          ${pano.length ? '<div class="cam-note">Panoramen: Panomax · Klick öffnet die 360°-Ansicht</div>' : ""}
         </td>
       </tr>`;
   }
@@ -895,6 +1066,7 @@
     const hist = r.hist;
     const updated = hist ? null : fmtDateTime(d.lifts_updated_at || d.fetched_at || r.checked_at);
     const isOpen = !hist && state.expanded.has(key(r)) && !!state.weather[key(r)];
+    const camOpen = state.camsOpen.has(key(r)) && camsOf(r).length > 0;
 
     // Herkunft der Werte im historischen Modus
     let sourceText = "";
@@ -931,7 +1103,7 @@
         (condition ? `<div class="updated">Piste: ${esc(condition)}</div>` : "");
     }
 
-    return `<tr data-key="${esc(key(r))}" class="${r.status === "open" ? "is-open" : "is-closed"}${isOpen ? " is-expanded" : ""}">
+    return `<tr data-key="${esc(key(r))}" class="${r.status === "open" ? "is-open" : "is-closed"}${isOpen || camOpen ? " is-expanded" : ""}">
       <td>
         <div class="name-line">
           <div class="name">${name}</div>
@@ -947,14 +1119,14 @@
           ${updated ? `<span class="updated">Stand ${esc(updated)}</span>` : ""}
           ${sourceText ? `<span class="updated src-${esc(hist.source)}" title="${esc(sourceTitle)}">${esc(sourceText)}</span>` : ""}
         </div>
-        ${hist ? "" : weatherButton(r, isOpen)}
+        ${hist ? "" : weatherButton(r, isOpen)}${camButton(r, camOpen)}
       </td>
       <td class="num" data-label="Schnee Berg">${snowCell(r, "mountain_cm")}</td>
       <td class="num" data-label="Schnee Tal">${snowCell(r, "valley_cm")}</td>
       <td data-label="Lifte offen">${liftsCell(r)}</td>
       <td data-label="Pisten offen">${slopesCell(r)}</td>
       <td data-label="${hist ? "Neuschnee am Tag" : "Letzter Schneefall"}">${lastCell}</td>
-    </tr>${isOpen ? weatherRowHTML(r) : ""}`;
+    </tr>${isOpen ? weatherRowHTML(r, camOpen) : ""}${camOpen ? camRowHTML(r) : ""}`;
   }
 
   // ---------- Suche: weitere Skigebiete hinzufügen ----------
@@ -1140,14 +1312,16 @@
     const add = e.target.closest(".add-btn");
     if (add) { addToList([add.dataset.key]); return; }
 
-    const btn = e.target.closest(".wx-toggle");
+    const btn = e.target.closest(".wx-toggle, .cam-toggle");
     if (!btn) return;
     const k = btn.dataset.key;
-    if (state.expanded.has(k)) state.expanded.delete(k);
-    else state.expanded.add(k);
+    const isCam = btn.classList.contains("cam-toggle");
+    const set = isCam ? state.camsOpen : state.expanded;
+    if (set.has(k)) set.delete(k);
+    else set.add(k);
     render();
     // Fokus auf dem Knopf halten (Tastaturbedienung)
-    const again = els.rows.querySelector(`.wx-toggle[data-key="${CSS.escape(k)}"]`);
+    const again = els.rows.querySelector(`.${isCam ? "cam" : "wx"}-toggle[data-key="${CSS.escape(k)}"]`);
     if (again) again.focus();
   });
   els.reload.addEventListener("click", load);
