@@ -969,10 +969,13 @@
         // Titel "Gemeinde › Richtung: Name" -> "Name"
         const title = w.title || loc.city || "Webcam";
         const cut = title.indexOf(": ");
+        let name = cut > 0 ? title.slice(cut + 2) : title;
+        // manche Betreiber tragen statt eines Namens eine Mitteilung ein -> dann den Ort zeigen
+        if (/sehr geehrte|dear (customer|user)/i.test(name)) name = cut > 0 ? title.slice(0, cut) : loc.city || "Webcam";
         return {
           id: w.webcamId,
           title,
-          name: cut > 0 ? title.slice(cut + 2) : title,
+          name,
           img: w.images.current.preview,
           w: size.width || 400,
           h: size.height || 224,
