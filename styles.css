@@ -323,6 +323,9 @@ select, .btn {
 
 .snow { font-weight: 600; }
 .model { color: var(--muted); font-style: italic; font-weight: 400; }
+.station { font-weight: 600; color: var(--muted); }
+/* Herkunft unter der Schneehöhe, wenn das Skigebiet keine meldet */
+.snow-src { display: block; color: var(--muted); font-size: 0.72rem; font-weight: 400; font-style: normal; line-height: 1.3; }
 .na { color: var(--muted); }
 
 .count { font-variant-numeric: tabular-nums; white-space: nowrap; }

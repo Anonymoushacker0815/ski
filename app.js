@@ -74,6 +74,12 @@
   const ARCHIVE_MIN = "1940-01-01";
   const OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive";
 
+  // Gemessene Naturschneehöhe, wenn ein österreichisches Skigebiet selbst keine meldet:
+  // GeoSphere-Austria-Bergstationen (TAWES, CC BY 4.0) ab 1400 m, höchstens 6 km entfernt
+  const GEOSPHERE = "https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min";
+  const STATION_MIN_ALT = 1400; // Talstationen sagen über den Schnee am Berg wenig
+  const STATION_MAX_KM = 6;
+
   // Webcams: Zuordnung Skigebiet -> Kameras kommt aus data/webcams.json (scripts/build_webcams.py).
   // Panomax-Panoramen werden eingebettet (Aufnahmezeit und Archiv über die offene API),
   // foto-webcam.eu nur verlinkt (deren Bilder dürfen nicht übernommen werden).
@@ -152,6 +158,11 @@
     camData: {}, // "camId|live" bzw. "camId|JJJJ-MM-TT" -> { date, time, small, opt, reduced } oder null
     camStamp: 0, // 5-Minuten-Takt, damit "Aktualisieren" frische Livebilder holt
     windy: {}, // Schlüssel -> { t, cams: [...], error } (Windy, nur aktuell)
+
+    // Messstationen (Naturschnee)
+    stations: null, // GeoSphere-Bergstationen (Metadaten)
+    stationOf: {}, // Schlüssel -> { id, name, alt, km } oder null
+    stationSnow: {}, // Stations-id -> { cm, time } oder null
   };
 
   // Eindeutiger Schlüssel pro Skigebiet (auch Adresse der Einzelmeldung)
@@ -193,6 +204,7 @@
     await Promise.all([
       need.length ? loadDetails(need) : null,
       need.length ? loadWeather(need) : null,
+      loadStationSnow(list),
       loadHistory(list),
     ]);
   }
@@ -381,11 +393,68 @@
   // Modell-Schneehöhe: aktuell aus der Prognose, historisch aus dem Archiv
   const modelOf = (r) => (r.hist ? r.hist.model : state.weather[key(r)]) || null;
 
-  // Gemeldete Schneehöhe Berg, sonst Modellwert (für Sortierung)
+  // Gemeldete Schneehöhe Berg, sonst gemessener Naturschnee, sonst Modellwert (für Sortierung)
   function snowValue(r) {
     if (r.snow && r.snow.mountain_cm != null) return r.snow.mountain_cm;
+    const st = stationSnowOf(r);
+    if (st) return st.cm;
     const m = modelOf(r);
     return m && m.snowCm != null ? m.snowCm : null;
+  }
+
+  // ---------- Gemessener Naturschnee (GeoSphere Austria) ----------
+
+  // "KANZELHOEHE" -> "Kanzelhöhe", "HAHNENKAMM/EHRENBACHHOEHE" -> "Hahnenkamm/Ehrenbachhöhe"
+  const stationName = (s) =>
+    String(s || "").toLowerCase()
+      .replace(/(^|[^aeiou])oe/g, "$1ö").replace(/(^|[^aeiou])ue/g, "$1ü")
+      .replace(/(^|[\s/(.-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+
+  async function loadStationSnow(list) {
+    const at = list.filter((r) => r.country === "at" && r.location);
+    if (!at.length) return;
+    try {
+      if (!state.stations) {
+        const meta = await getJSON(`${GEOSPHERE}/metadata`);
+        state.stations = (meta.stations || []).filter((s) => s.is_active && s.altitude >= STATION_MIN_ALT);
+      }
+      for (const r of at) {
+        const k = key(r);
+        if (k in state.stationOf) continue;
+        let best = null;
+        let bestKm = STATION_MAX_KM;
+        for (const s of state.stations) {
+          const km = distKm(r.location, s);
+          if (km <= bestKm) { best = s; bestKm = km; }
+        }
+        state.stationOf[k] = best
+          ? { id: String(best.id), name: stationName(best.name), alt: best.altitude, km: bestKm }
+          : null;
+      }
+      const ids = [...new Set(at.map((r) => state.stationOf[key(r)]).filter(Boolean).map((s) => s.id))]
+        .filter((id) => !(id in state.stationSnow));
+      if (!ids.length) return;
+      const d = await getJSON(`${GEOSPHERE}?parameters=SCHNEE&station_ids=${ids.join(",")}`);
+      const time = d.timestamps ? d.timestamps[d.timestamps.length - 1] : null;
+      for (const f of d.features || []) {
+        const p = f.properties || {};
+        const data = p.parameters && p.parameters.SCHNEE ? p.parameters.SCHNEE.data : null;
+        const v = data && data.length ? data[data.length - 1] : null;
+        state.stationSnow[String(p.station)] = v != null && v >= 0 ? { cm: Math.round(v), time } : null;
+      }
+      for (const id of ids) if (!(id in state.stationSnow)) state.stationSnow[id] = null;
+    } catch (err) {
+      // Messwerte sind ein Zusatz – sonst bleibt der Modellwert
+      console.warn("GeoSphere-Stationen nicht erreichbar:", err);
+    }
+  }
+
+  // Aktuelle Messung der zugeordneten Station (historisch nicht)
+  function stationSnowOf(r) {
+    if (r.hist) return null;
+    const s = state.stationOf[key(r)];
+    const v = s ? state.stationSnow[s.id] : null;
+    return v ? { ...s, ...v } : null;
   }
 
   // Neuschnee: aktuell Summe der 7-Tage-Prognose, historisch der Neuschnee des Tages (cm)
@@ -574,6 +643,7 @@
       searchHint();
       state.camStamp = Math.floor(Date.now() / 300000);
       state.windy = {};
+      state.stationSnow = {};
       for (const k of Object.keys(state.camData)) if (k.endsWith("|live")) delete state.camData[k];
       render();
 
@@ -583,6 +653,7 @@
       await Promise.all([
         loadDetails(state.resorts),
         loadWeather(state.resorts),
+        loadStationSnow(state.resorts),
         loadWebcams(),
         loadOwnIndex().then(() => loadHistory(state.resorts)),
       ]);
@@ -807,7 +878,8 @@
       best
         ? stat(`${fmt(best.snow.mountain_cm)} cm`, `Höchste Schneehöhe: ${esc(best.name)}`)
         : bestModel
-          ? stat(`≈ ${fmt(snowValue(bestModel))} cm`, `Höchste Modell-Schneehöhe: ${esc(bestModel.name)}`)
+          ? stat(`${stationSnowOf(bestModel) ? "" : "≈ "}${fmt(snowValue(bestModel))} cm`,
+            `Am meisten Naturschnee (keine Meldung): ${esc(bestModel.name)}`)
           : stat("–", "Keine Schneehöhen gemeldet"),
     ];
     if (snowiest) {
@@ -823,11 +895,25 @@
   function snowCell(r, which) {
     const v = r.snow ? r.snow[which] : null;
     if (v != null) return `<span class="snow">${fmt(v)} cm</span>`;
+    if (which !== "mountain_cm") return '<span class="na">–</span>';
+
+    // Keine Meldung: nur Naturschnee bekannt – bei offenen Pisten liegt meist Kunstschnee drauf
+    const piste = r.status === "open"
+      ? '<span class="snow-src" title="Das Skigebiet hat offen, meldet aber keine Schneehöhe auf den Pisten (meist Kunstschnee)">Piste: nicht gemeldet</span>'
+      : "";
+    const st = stationSnowOf(r);
+    if (st) {
+      const t = fmtDateTime(st.time);
+      const km = st.km < 1 ? "< 1" : fmt(Math.round(st.km));
+      return `<span class="station" title="Gemessene Naturschneehöhe der GeoSphere-Station ${esc(st.name)} (${fmt(Math.round(st.alt))} m, ${km} km entfernt)${t ? `, Stand ${esc(t)}` : ""} – vom Skigebiet nicht gemeldet">${fmt(st.cm)} cm</span>
+        <span class="snow-src">Naturschnee, ${esc(st.name)} ${fmt(Math.round(st.alt))} m</span>${piste}`;
+    }
     const m = modelOf(r);
-    if (which === "mountain_cm" && m && m.snowCm != null) {
+    if (m && m.snowCm != null) {
       const elev = m.elevation != null ? ` für ${fmt(Math.round(m.elevation))} m` : "";
       const src = r.hist ? `Open-Meteo-Archiv, Tagesmittel ${fmtDay(state.histDate)}` : "Open-Meteo";
-      return `<span class="model" title="Modellwert ${src}${elev} – vom Skigebiet nicht gemeldet">≈ ${fmt(m.snowCm)} cm</span>`;
+      return `<span class="model" title="Modellwert ${src}${elev}, ohne Kunstschnee – vom Skigebiet nicht gemeldet">≈ ${fmt(m.snowCm)} cm</span>
+        <span class="snow-src">Naturschnee, Modell</span>${piste}`;
     }
     return '<span class="na">–</span>';
   }
