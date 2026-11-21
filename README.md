@@ -11,7 +11,7 @@ Beim ersten Besuch zeigt die Seite die 10 größten Skigebiete Österreichs (nac
 Ein Klick auf „Lifte offen“ öffnet die Detailansicht: Karte (OpenTopoMap, wahlweise OpenStreetMap) mit dem Gebietsumriss, allen Pisten nach Schwierigkeit eingefärbt und allen Liften, dazu eine Liftliste mit Typ, Länge, Tal-/Bergstation, Förderleistung und Ausstattung. Ein Klick auf einen Lift zeigt ihn auf der Karte.
 
 - Geometrie: [OpenSkiData](https://openskimap.org) (© OpenStreetMap-Mitwirkende, ODbL), von LiftRadar als Kacheln (`/ski/v1/10/x/y.json`) aufbereitet und jedem Gebiet zugeordnet; geladen werden die Kachel des Gebietspunkts und ihre 8 Nachbarn.
-- Betrieb: Wie viele Lifte je Typ offen sind, kommt aus der LiftRadar-Meldung. Welcher Lift genau läuft, meldet die Quelle nicht – die Karte färbt Lifte deshalb nicht nach offen/zu.
+- Betrieb: LiftRadar meldet nur, wie viele Lifte je Typ offen sind (Gondelbahnen, Sessellifte, Schlepplifte, Förderbänder …), nicht welche. Die Karte leitet daraus ab: alle des Typs offen → grün, keiner → hellgrau (ebenso bei geschlossenem Gebiet), sonst schwarz als „unklar“ mit Hinweis in der Legende (z. B. „2 von 7 Sesselliften offen“).
 - [Leaflet](https://leafletjs.com) 1.9.4 wird erst beim ersten Öffnen von cdnjs geladen (mit SRI-Prüfsumme).
 
 ## Webcams

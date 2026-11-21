@@ -1394,6 +1394,23 @@
     cable_car: "Pendelbahnen", gondola: "Gondelbahnen", funicular: "Standseilbahnen", chairlift: "Sessellifte",
     drag_lift: "Schlepplifte", carpet: "Förderbänder", other: "Sonstige",
   };
+  const LR_LIFT_DATIV = {
+    cable_car: "Pendelbahnen", gondola: "Gondelbahnen", funicular: "Standseilbahnen", chairlift: "Sesselliften",
+    drag_lift: "Schleppliften", carpet: "Förderbändern", other: "sonstigen Liften",
+  };
+  // OpenSkiData-Lifttyp -> Typ, unter dem LiftRadar offene Lifte zählt
+  const LR_TYPE_OF = {
+    cable_car: "cable_car", gondola: "gondola", mixed_lift: "gondola", funicular: "funicular",
+    chair_lift: "chairlift", drag_lift: "drag_lift", "t-bar": "drag_lift", "j-bar": "drag_lift",
+    platter: "drag_lift", rope_tow: "drag_lift", magic_carpet: "carpet",
+  };
+  // Darstellung nach Betrieb: offen grün, zu hellgrau; "unklar" = nur ein Teil des Typs offen
+  const LIFT_STATUS = {
+    open: { label: "offen", line: "#16a34a", casing: "#ffffff", dot: "#15803d", rank: 0 },
+    unknown: { label: "offen oder zu (unklar)", line: "#111827", casing: "#ffffff", dot: "#111827", rank: 1 },
+    closed: { label: "geschlossen", line: "#d1d5db", casing: "#6b7280", dot: "#9ca3af", rank: 2 },
+  };
+
   // Pistenfarben wie auf österreichischen Pistenplänen
   const RUN_STYLES = {
     novice: { color: "#16a34a", label: "Sehr leicht" },
@@ -1541,7 +1558,8 @@
         <p class="detail-attr">Lifte &amp; Pisten: <a href="https://openskimap.org" target="_blank" rel="noopener">OpenSkiData</a>,
           © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-Mitwirkende</a> (ODbL), über
           <a href="https://liftradar.eu/api" target="_blank" rel="noopener">LiftRadar</a>.
-          Betriebszahlen je Lifttyp von LiftRadar; welcher Lift genau läuft, meldet die Quelle nicht.</p>
+          Offen/zu je Lift ist aus den LiftRadar-Zahlen je Lifttyp abgeleitet: grün, wenn alle Lifte dieses Typs laufen,
+          grau, wenn keiner läuft – sonst „unklar“, weil die Quelle nicht meldet, welche es sind.</p>
       </div>`;
     if (!dlg.open) dlg.showModal();
     document.documentElement.classList.add("detail-open");
@@ -1549,7 +1567,7 @@
     try {
       const [, data] = await Promise.all([loadLeaflet(), loadSkiMap(base)]);
       if (!dlg.open || dlg.dataset.key !== k) return; // inzwischen geschlossen oder anderes Gebiet
-      drawDetailMap(base, data);
+      drawDetailMap(base, data, r);
     } catch (err) {
       console.warn(err);
       const box = document.getElementById("detail-map");
@@ -1557,7 +1575,23 @@
     }
   }
 
-  function drawDetailMap(r, data) {
+  // Betrieb eines Lifts aus den Zahlen je Typ ableiten (LiftRadar meldet nicht, welcher Lift läuft):
+  // alle des Typs offen -> offen, keiner -> zu, sonst unklar
+  function liftStatus(l, v) {
+    if (v.status !== "open") return "closed"; // geschlossen, kein Bericht oder historisch ohne Betrieb
+    const d = state.details[key(v)] || {};
+    const byType = !v.hist && d.lifts_by_type ? d.lifts_by_type : null;
+    const t = LR_TYPE_OF[l.type] || "other";
+    const c = byType && ((byType[t] && byType[t].total ? byType[t] : null) ||
+      (t === "cable_car" && byType.gondola) || byType.other);
+    const n = c && c.total ? c : v.lifts;
+    if (!n || !n.total) return "unknown";
+    if (!n.open) return "closed";
+    return n.open >= n.total ? "open" : "unknown";
+  }
+
+  function drawDetailMap(r, data, view) {
+    view = view || r;
     const box = document.getElementById("detail-map");
     box.innerHTML = "";
     if (detailMap) { detailMap.remove(); detailMap = null; }
@@ -1598,24 +1632,28 @@
         bounds.extend(line.getBounds());
       });
 
-    // Lifte: dunkle Linie mit heller Kontur, Stationen als Punkte
+    // Lifte nach Betrieb eingefärbt (Linie mit Kontur, Stationen als Punkte); offene zuerst
     const liftLayers = [];
     const typeRank = (t) => {
       const i = Object.keys(LIFT_TYPES).indexOf(t);
       return i < 0 ? 99 : i;
     };
     const lifts = data.lifts
-      .map((l) => ({ l, info: liftInfo(l) }))
-      .sort((a, b) => typeRank(a.l.type) - typeRank(b.l.type) || a.info.name.localeCompare(b.info.name, "de"));
-    lifts.forEach(({ l, info }, i) => {
+      .map((l) => ({ l, info: liftInfo(l), st: liftStatus(l, view) }))
+      .sort((a, b) => LIFT_STATUS[a.st].rank - LIFT_STATUS[b.st].rank ||
+        typeRank(a.l.type) - typeRank(b.l.type) || a.info.name.localeCompare(b.info.name, "de"));
+    // geschlossene unten zeichnen, offene oben
+    lifts.map((x, i) => [x, i]).reverse().forEach(([{ l, info, st }, i]) => {
+      const sty = LIFT_STATUS[st];
       const pts = ll(l.c);
-      const casing = L.polyline(pts, { color: "#fff", weight: 6, opacity: 0.9, interactive: false });
-      const line = L.polyline(pts, { color: "#111827", weight: 3 });
+      const casing = L.polyline(pts, { color: sty.casing, weight: st === "closed" ? 5 : 7, opacity: 0.9, interactive: false });
+      const line = L.polyline(pts, { color: sty.line, weight: st === "open" ? 4 : 3 });
       const ends = [pts[0], pts[pts.length - 1]].map((p) =>
-        L.circleMarker(p, { radius: 3.5, color: "#111827", weight: 2, fillColor: "#fff", fillOpacity: 1, interactive: false }));
+        L.circleMarker(p, { radius: 3.5, color: sty.dot, weight: 2, fillColor: "#fff", fillOpacity: 1, interactive: false }));
       const group = L.featureGroup([casing, line, ...ends]).addTo(map);
-      line.bindPopup(`<strong>${esc(info.name)}</strong><br>${esc(info.kind)}<br><small>${esc(liftLineText(info))}</small>`);
-      line.bindTooltip(esc(info.name), { sticky: true });
+      line.bindPopup(`<strong>${esc(info.name)}</strong><br>${esc(info.kind)} · <span class="pop-${st}">${esc(sty.label)}</span>
+        <br><small>${esc(liftLineText(info))}</small>`);
+      line.bindTooltip(`${esc(info.name)} · ${esc(sty.label)}`, { sticky: true });
       liftLayers[i] = { group, line };
       bounds.extend(group.getBounds());
     });
@@ -1638,7 +1676,20 @@
     const legend = [...used]
       .sort((a, b) => styleRank(a) - styleRank(b))
       .map((st) => `<span>${swatch(`border-top:3px ${st.dash ? "dashed" : "solid"} ${st.color}`)}${esc(st.label)}</span>`);
-    if (lifts.length) legend.unshift(`<span>${swatch("border-top:3px solid #111827")}Lift</span>`);
+    // Lift-Legende: nur vorkommende Zustände; bei "unklar" dazuschreiben, wie viele des Typs offen sind
+    const d = state.details[key(view)] || {};
+    const partial = !view.hist && d.lifts_by_type
+      ? Object.entries(d.lifts_by_type).filter(([, c]) => c && c.open > 0 && c.open < c.total)
+        .map(([t, c]) => `${fmt(c.open)} von ${fmt(c.total)} ${LR_LIFT_DATIV[t] || t}`)
+      : [];
+    const states = [...new Set(lifts.map((x) => x.st))].sort((a, b) => LIFT_STATUS[a].rank - LIFT_STATUS[b].rank);
+    legend.unshift(...states.map((st) => {
+      const sty = LIFT_STATUS[st];
+      const label = st === "unknown"
+        ? `Lift unklar${partial.length ? ` (${partial.join(", ")} offen – welche, ist nicht gemeldet)` : ""}`
+        : `Lift ${sty.label}`;
+      return `<span>${swatch(`border-top:4px solid ${sty.line};box-shadow:0 0 0 1px ${sty.casing}`)}${esc(label)}</span>`;
+    }));
     document.getElementById("detail-legend").innerHTML = legend.join("");
 
     // Liftliste
@@ -1648,9 +1699,9 @@
       return;
     }
     listBox.innerHTML = `<h3 class="detail-h3">Lifte (${lifts.length})</h3>
-      <ul class="lift-list">${lifts.map(({ info }, i) => `<li>
-          <button type="button" class="lift-item" data-i="${i}">
-            <span class="lift-name">${esc(info.name)}</span>
+      <ul class="lift-list">${lifts.map(({ info, st }, i) => `<li>
+          <button type="button" class="lift-item st-${st}" data-i="${i}">
+            <span class="lift-name"><i class="lift-dot" title="${esc(LIFT_STATUS[st].label)}"></i>${esc(info.name)}</span>
             <span class="lift-sub">${esc(info.kind)} · ${esc(liftLineText(info))}</span>
           </button></li>`).join("")}</ul>`;
     listBox.onclick = (e) => {
